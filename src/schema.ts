@@ -1,5 +1,3 @@
-import type { TableOptions } from './types';
-
 type SchemaKind = {
 	kind?: unknown;
 	item?: SchemaKind;
@@ -7,19 +5,11 @@ type SchemaKind = {
 	fields?: readonly { name: string; kind: SchemaKind }[];
 };
 
-/** The part of a SurrealKit schema document (version 2) that is read here. */
-export type SurrealSchemaDocument = {
-	version: number;
-	tables: readonly {
-		name: string;
-		type?: { kind?: unknown };
-		fields?: readonly { path: readonly string[]; kind?: SchemaKind }[];
-	}[];
-};
-
-/** A table's name, relation flag and record-link fields, safe to bundle. */
-export type GeneratedTableOptions = TableOptions & {
-	recordFields: readonly string[];
+/** A table from a SurrealKit schema document (`surrealkit compile`). */
+export type SurrealSchemaTable = {
+	name: string;
+	type?: { kind?: unknown };
+	fields?: readonly { path: readonly string[]; kind?: SchemaKind }[];
 };
 
 const holdsText = (kind: SchemaKind): boolean =>
@@ -68,38 +58,32 @@ const collectRecordPaths = (
 	}
 };
 
-/**
- * Reads table names and record-link fields from a SurrealKit schema document
- * (`surrealkit compile`). In client code, pass only the document's `version`
- * and `tables` through named imports, so its access definitions stay out of
- * the bundle.
- */
-export function tablesFromSchema(
-	schema: SurrealSchemaDocument,
-): Record<string, GeneratedTableOptions> {
-	if (schema.version !== 2) {
+/** Reads a table's relation flag and record-link fields from SurrealKit's `tables`. */
+export function schemaTableOptions(
+	tables: readonly SurrealSchemaTable[],
+	name: string,
+): { relation: boolean; recordFields: string[] } {
+	const table = tables.find((candidate) => candidate.name === name);
+	if (!table) {
 		throw new Error(
-			`Expected a version 2 schema document (surrealkit compile), got version ${schema.version}.`,
+			`Table "${name}" is not in the provided schema tables.`,
 		);
 	}
-	const tables: Record<string, GeneratedTableOptions> = {};
-	for (const table of schema.tables) {
-		const relation = table.type?.kind === 'relation';
-		const paths = new Set<string>();
-		for (const field of table.fields ?? []) {
-			const path = field.path.filter((part) => part !== '*');
-			collectRecordPaths(field.kind, path, paths, table.name);
+	const relation = table.type?.kind === 'relation';
+	const paths = new Set<string>();
+	for (const field of table.fields ?? []) {
+		if (!Array.isArray(field.path)) {
+			throw new Error(
+				'Expected tables from a version 2 schema document (surrealkit compile).',
+			);
 		}
-		paths.delete('id');
-		if (relation) {
-			paths.delete('in');
-			paths.delete('out');
-		}
-		tables[table.name] = {
-			name: table.name,
-			...(relation ? { relation: true } : {}),
-			recordFields: [...paths].sort(),
-		};
+		const path = field.path.filter((part) => part !== '*');
+		collectRecordPaths(field.kind, path, paths, table.name);
 	}
-	return tables;
+	paths.delete('id');
+	if (relation) {
+		paths.delete('in');
+		paths.delete('out');
+	}
+	return { relation, recordFields: [...paths].sort() };
 }

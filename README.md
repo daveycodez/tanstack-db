@@ -141,11 +141,12 @@ collection
 type SurrealCollectionOptions<T> = {
 	id?: string;
 	db: Surreal;
-	table: Table | { name: string; relation?: boolean; recordFields?: readonly string[] } | string;
+	table: Table | { name: string; relation?: boolean } | string;
 	queryClient: QueryClient;
 	queryKey: readonly unknown[];
 	syncMode?: 'eager' | 'on-demand' | 'progressive';
 	recordIds?: 'native' | 'string'; // default 'native'
+	tables?: readonly SurrealSchemaTable[]; // SurrealKit schema tables, for recordIds: 'string'
 	e2ee?: {
 		enabled: boolean;
 		crypto: CryptoProvider;
@@ -197,23 +198,22 @@ Compile it with SurrealKit, which needs no database connection:
 surrealkit compile --out src/schema.json
 ```
 
-If your schema uses template variables, pass them with `--var`. Then import the
-document's `tables` and `version` directly. Use named imports with a bundler
-that tree-shakes JSON, such as Vite, so the document's access definitions stay
-out of the client bundle.
+If your schema uses template variables, pass them with `--var`. Then pass the
+document's `tables` directly. Use a named import with a bundler that tree-shakes
+JSON, such as Vite, so the document's access definitions stay out of the client
+bundle.
 
 ```tsx
-import { surrealCollectionOptions, tablesFromSchema } from '@surrealdb/tanstack-db';
+import { surrealCollectionOptions } from '@surrealdb/tanstack-db';
 import { eq, useLiveQuery } from '@tanstack/react-db';
-import { tables as schemaTables, version } from './schema.json';
+import { tables } from './schema.json';
 import type { Profile } from './schema.generated'; // uses RecordId
-
-const tables = tablesFromSchema({ version, tables: schemaTables });
 
 const profiles = createCollection(
 	surrealCollectionOptions<Profile>({
 		db,
-		table: tables.profile,
+		table: 'profile',
+		tables,
 		queryClient,
 		queryKey: ['profile'],
 		syncMode: 'on-demand',
@@ -231,12 +231,12 @@ const { data: orgProfiles } = useLiveQuery({
 await profiles.insert({ orgId: 'org:acme', bio: 'Hi' }); // stored as a record link
 ```
 
-With a `RecordId` row type, the collection's rows use strings, and a table
-without `recordFields` is a type error when the row has record links. Compare
+With a `RecordId` row type, the collection's rows use strings, and leaving out
+`tables` is a type error when the row has record links. Compare
 against the string form, e.g. `String(recordId)`.
 
-`tablesFromSchema` throws on a field typed as both a record and a string, since
-those values cannot be told apart. Links inside undeclared `FLEXIBLE` object
+The adapter throws on a field typed as both a record and a string, since those
+values cannot be told apart. Links inside undeclared `FLEXIBLE` object
 keys are not in the schema, so they are read as strings and written as text.
 
 ## E2EE

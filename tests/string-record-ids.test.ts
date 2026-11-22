@@ -22,6 +22,20 @@ type User = {
 	meta?: { manager?: string; tags?: string[] };
 };
 
+const schemaTables = [
+	{
+		name: 'user',
+		type: { kind: 'normal' },
+		fields: [
+			{ path: ['orgId'], kind: { kind: 'record', tables: ['org'] } },
+			{
+				path: ['meta', 'manager'],
+				kind: { kind: 'record', tables: ['user'] },
+			},
+		],
+	},
+];
+
 type Write = { op: string; target: string; payload?: unknown };
 
 const serverRows = () => [
@@ -81,7 +95,8 @@ const createUsers = (
 	createCollection(
 		surrealCollectionOptions<User>({
 			db: db as never,
-			table: { name: 'user', recordFields: ['orgId', 'meta.manager'] },
+			table: 'user',
+				tables: schemaTables,
 			queryClient: new QueryClient(),
 			queryKey: ['user', queryKey],
 			syncMode,
@@ -225,7 +240,7 @@ describe("recordIds: 'string'", () => {
 		expect(String(payload.meta.manager)).toBe('user:new');
 	});
 
-	it('derives string rows and requires record fields for a RecordId row type', async () => {
+	it('derives string rows and requires schema tables for a RecordId row type', async () => {
 		type NativeUser = {
 			id: RecordId<'user'>;
 			name: string;
@@ -240,7 +255,7 @@ describe("recordIds: 'string'", () => {
 			recordIds: 'string',
 		} as const;
 
-		// @ts-expect-error a row with record links needs a generated table
+		// @ts-expect-error a row with record links needs SurrealKit's tables
 		surrealCollectionOptions<NativeUser>({
 			...base,
 			table: { name: 'user' },
@@ -250,7 +265,8 @@ describe("recordIds: 'string'", () => {
 		const users = createCollection(
 			surrealCollectionOptions<NativeUser>({
 				...base,
-				table: { name: 'user', recordFields: ['orgId', 'meta.manager'] },
+				table: 'user',
+				tables: schemaTables,
 				queryKey: ['user', 'typed'],
 			}),
 		);

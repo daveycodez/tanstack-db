@@ -66,6 +66,7 @@ import {
 	toTableOptions,
 	toTableResource,
 } from './internal/table-options';
+import { schemaTableOptions } from './schema';
 import { manageTable } from './table';
 import type {
 	AADContext,
@@ -84,7 +85,7 @@ import { fromBase64, fromBytes, toBase64, toBytes } from './util';
 export * from './crdt';
 export * from './encryption';
 export { toRecordKeyString } from './id';
-export * from './schema';
+export type { SurrealSchemaTable } from './schema';
 export * from './types';
 
 const NOOP = () => {};
@@ -148,6 +149,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		crdt,
 		syncMode: inputSyncMode,
 		recordIds: recordIdMode = 'native',
+		tables: schemaTables,
 	} = config;
 
 	if (!queryClient || !queryKey) {
@@ -161,14 +163,22 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	// Subset transport keeps TanStack predicates aligned with SurrealQL pushdown.
 	const queryDrivenSyncMode: 'eager' | 'on-demand' = 'on-demand';
 	const queryDrivenUsesSubsets = queryDrivenSyncMode === 'on-demand';
-	const tableOptions = toTableOptions(table);
-	const tableName = tableOptions.name;
+	const inputTableOptions = toTableOptions(table);
+	const tableName = inputTableOptions.name;
 	const stringIds = recordIdMode === 'string';
+	const schemaOptions =
+		stringIds && schemaTables
+			? schemaTableOptions(schemaTables, tableName)
+			: undefined;
+	const tableOptions = {
+		...inputTableOptions,
+		relation: inputTableOptions.relation || schemaOptions?.relation,
+	};
 	// Record-link fields sent to SurrealDB as record ids in `recordIds: 'string'` mode.
 	const recordFields = [
 		'id',
 		...(tableOptions.relation ? ['in', 'out'] : []),
-		...(tableOptions.recordFields ?? []),
+		...(schemaOptions?.recordFields ?? []),
 	];
 	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
 	const tableResource = toTableResource(table);
