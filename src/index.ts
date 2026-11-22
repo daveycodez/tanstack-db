@@ -55,6 +55,11 @@ import {
 	toSurrealRecordId,
 	toTableRecordIdString,
 } from './internal/string-ids';
+import type {
+	PersistedStringRecordCollectionOptions,
+	StringRecordCollectionOptions,
+	StringRecordRow,
+} from './internal/string-record-types';
 import {
 	applyPreferredRecordIdIdentityToCollection,
 	primeRecordIdIdentityFromSubset,
@@ -72,10 +77,7 @@ import type {
 	AADContext,
 	AdapterSyncMode,
 	LocalChange,
-	PersistedStringRecordCollectionOptions,
 	PersistedSurrealCollectionOptions,
-	StringRecordCollectionOptions,
-	StringRecordRow,
 	SurrealCollectionOptions,
 	SurrealCollectionOptionsReturn,
 	SyncedTable,
@@ -1151,7 +1153,7 @@ export function surrealCollectionOptions<
 	T extends SyncedTable<object> & { id: RecordId },
 >(
 	config: StringRecordCollectionOptions<T>,
-): SurrealCollectionResult<StringRecordRow<T> & SyncedTable<object>>;
+): SurrealCollectionResult<StringRecordRow<T>>;
 export function surrealCollectionOptions<T extends SyncedTable<object>>(
 	config: SurrealCollectionOptions<T>,
 ): SurrealCollectionResult<T>;
@@ -1188,9 +1190,7 @@ export function persistedSurrealCollectionOptions<
 	T extends SyncedTable<object> & { id: RecordId },
 >(
 	config: PersistedStringRecordCollectionOptions<T>,
-): ReturnType<
-	typeof createPersistedOptions<StringRecordRow<T> & SyncedTable<object>>
->;
+): ReturnType<typeof createPersistedOptions<StringRecordRow<T>>>;
 export function persistedSurrealCollectionOptions<
 	T extends SyncedTable<object>,
 >(
