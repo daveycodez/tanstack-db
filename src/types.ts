@@ -7,7 +7,7 @@ import type {
 import type { PersistedCollectionPersistence } from '@tanstack/db-sqlite-persistence-core';
 import type { QueryClient } from '@tanstack/query-core';
 import type { LoroDoc } from 'loro-crdt';
-import type { RecordId, Surreal, Table } from 'surrealdb';
+import type { RecordId, Surreal, Table, Value } from 'surrealdb';
 
 import type { CryptoProvider } from './encryption';
 
@@ -105,7 +105,9 @@ export type SurrealCollectionOptions<T extends object> = Omit<
 	 *   e.g. `user:abc`, `user:42`, `user:⟨42⟩`), so they compare by value in
 	 *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the fields in
 	 *   `recordFields` are converted back to record ids when sent to SurrealDB.
-	 *   Requires the row type's `id` to be a `string`.
+	 *   Pass a row type with `RecordId` fields (such as a generated one) to
+	 *   have `recordFields` checked at compile time, or a row type whose `id`
+	 *   is already a `string`.
 	 */
 	recordIds?: [T] extends [{ id: string }] ? RecordIdMode : 'native';
 	/**
@@ -114,10 +116,97 @@ export type SurrealCollectionOptions<T extends object> = Omit<
 	 * SurrealDB as record ids on writes and in pushed-down `where` filters.
 	 * `id` is always treated as a record id; `in`/`out` are too on relations.
 	 */
-	recordFields?: readonly string[];
+	recordFields?: RecordFieldsInput;
 };
 
 export type RecordIdMode = 'native' | 'string';
+
+/** Record-link fields, as a list or as a `{ path: true }` map. */
+export type RecordFieldsInput =
+	| readonly string[]
+	| Readonly<Record<string, true>>;
+
+// biome-ignore lint/suspicious/noExplicitAny: matches every RecordId instantiation.
+type AnyRecordId = RecordId<any, any, any>;
+
+type OpaqueValue =
+	| Value
+	| Date
+	| ArrayBuffer
+	| ArrayBufferView
+	| Map<unknown, unknown>
+	| Set<unknown>
+	| ((...args: never[]) => unknown);
+
+/** `T` with every `RecordId`, at any depth, replaced by its string form. */
+export type StringRecordIds<T> = T extends AnyRecordId
+	? string
+	: T extends OpaqueValue
+		? T
+		: T extends readonly (infer Item)[]
+			? StringRecordIds<Item>[]
+			: T extends object
+				? { [K in keyof T]: StringRecordIds<T[K]> }
+				: T;
+
+type Decrement = [never, 0, 1, 2, 3, 4];
+
+type RecordPathsOf<V, Path extends string, Depth extends number> = [
+	Depth,
+] extends [never]
+	? never
+	: V extends AnyRecordId
+		? Path
+		: V extends OpaqueValue
+			? never
+			: V extends readonly (infer Item)[]
+				? RecordPathsOf<Item, Path, Depth>
+				: V extends object
+					? {
+							[K in keyof V & string]-?: RecordPathsOf<
+								V[K],
+								`${Path}.${K}`,
+								Decrement[Depth]
+							>;
+						}[keyof V & string]
+					: never;
+
+/**
+ * Dot paths of the record-link fields of `T`, down to five levels. `id`, `in`
+ * and `out` are left out because the adapter handles them itself.
+ */
+export type RecordFieldPath<T> = {
+	[K in Exclude<keyof T & string, 'id' | 'in' | 'out'>]-?: RecordPathsOf<
+		T[K],
+		K,
+		4
+	>;
+}[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
+
+/** Requires a `recordFields` entry for every record-link field of `T`. */
+export type RequiredRecordFields<T> = [RecordFieldPath<T>] extends [never]
+	? { recordFields?: Readonly<Partial<Record<'in' | 'out', true>>> }
+	: {
+			recordFields: Readonly<
+				Record<RecordFieldPath<T>, true> &
+					Partial<Record<'in' | 'out', true>>
+			>;
+		};
+
+/** The row TanStack DB sees for `T` in `recordIds: 'string'` mode. */
+export type StringRecordRow<T> = StringRecordIds<T> & { id: string };
+
+/** Options for a row type with `RecordId` fields in `recordIds: 'string'` mode. */
+export type StringRecordCollectionOptions<T extends object> = Omit<
+	SurrealCollectionOptions<StringRecordRow<T>>,
+	'recordIds' | 'recordFields'
+> & { recordIds: 'string' } & RequiredRecordFields<T>;
+
+export type PersistedStringRecordCollectionOptions<T extends object> =
+	StringRecordCollectionOptions<T> & {
+		persistence: PersistedCollectionPersistence;
+		schemaVersion?: number;
+	};
 
 export type PersistedSurrealCollectionOptions<T extends object> =
 	SurrealCollectionOptions<T> & {

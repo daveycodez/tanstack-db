@@ -71,7 +71,10 @@ import type {
 	AADContext,
 	AdapterSyncMode,
 	LocalChange,
+	PersistedStringRecordCollectionOptions,
 	PersistedSurrealCollectionOptions,
+	StringRecordCollectionOptions,
+	StringRecordRow,
 	SurrealCollectionOptions,
 	SurrealCollectionOptionsReturn,
 	SyncedTable,
@@ -165,7 +168,9 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	const recordFields = [
 		'id',
 		...(tableOptions.relation ? ['in', 'out'] : []),
-		...inputRecordFields,
+		...(Array.isArray(inputRecordFields)
+			? (inputRecordFields as readonly string[])
+			: Object.keys(inputRecordFields)),
 	];
 	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
 	const tableResource = toTableResource(table);
@@ -915,12 +920,25 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 					...(normalizedModified as Partial<T>),
 					id: rowId,
 				} as T);
+				// String mode writes only what changed, so an edit can never
+				// rewrite a record link it did not touch.
+				const fieldsToWrite = stringIds
+					? omitUndefined(
+							stringifyRecordIdsDeep({
+								...(mutation.changes as Record<
+									string,
+									unknown
+								>),
+								id: undefined,
+							}),
+						)
+					: normalizedModified;
 
 				if (!crdtEnabled) {
 					if (!e2eeEnabled) {
 						await db
 							.update(mutationId)
-							.merge(toSurrealFields(normalizedModified));
+							.merge(toSurrealFields(fieldsToWrite));
 						writeUtils.writeUpsert?.(normalized);
 						continue;
 					}
@@ -937,7 +955,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 						: ({ id: rowId } as T);
 					const merged = {
 						...(decodedCurrent as Record<string, unknown>),
-						...(normalizedModified as Record<string, unknown>),
+						...(fieldsToWrite as Record<string, unknown>),
 					};
 					delete merged.id;
 					const encoded = await encodeBaseRow(
@@ -1111,9 +1129,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	} as SurrealCollectionOptionsReturn<T>;
 }
 
-export function surrealCollectionOptions<T extends SyncedTable<object>>(
-	config: SurrealCollectionOptions<T>,
-): CollectionConfig<
+type SurrealCollectionResult<T extends SyncedTable<object>> = CollectionConfig<
 	T,
 	string,
 	StandardSchemaV1<MutationInput<T>, T>,
@@ -1121,13 +1137,24 @@ export function surrealCollectionOptions<T extends SyncedTable<object>>(
 > & {
 	schema: StandardSchemaV1<MutationInput<T>, T>;
 	utils: UtilsRecord;
-} {
+};
+
+export function surrealCollectionOptions<
+	T extends SyncedTable<object> & { id: RecordId },
+>(
+	config: StringRecordCollectionOptions<T>,
+): SurrealCollectionResult<StringRecordRow<T> & SyncedTable<object>>;
+export function surrealCollectionOptions<T extends SyncedTable<object>>(
+	config: SurrealCollectionOptions<T>,
+): SurrealCollectionResult<T>;
+// biome-ignore lint/suspicious/noExplicitAny: the overloads carry the public types.
+export function surrealCollectionOptions(config: any): any {
 	return modernSurrealCollectionOptions(config);
 }
 
-export function persistedSurrealCollectionOptions<
-	T extends SyncedTable<object>,
->(config: PersistedSurrealCollectionOptions<T>) {
+function createPersistedOptions<T extends SyncedTable<object>>(
+	config: PersistedSurrealCollectionOptions<T>,
+) {
 	const { persistence, schemaVersion, ...surrealConfig } = config;
 
 	type Schema = StandardSchemaV1<Omit<T, 'id'> & { id?: T['id'] }, T>;
@@ -1147,6 +1174,23 @@ export function persistedSurrealCollectionOptions<
 		schemaVersion,
 		...options,
 	});
+}
+
+export function persistedSurrealCollectionOptions<
+	T extends SyncedTable<object> & { id: RecordId },
+>(
+	config: PersistedStringRecordCollectionOptions<T>,
+): ReturnType<
+	typeof createPersistedOptions<StringRecordRow<T> & SyncedTable<object>>
+>;
+export function persistedSurrealCollectionOptions<
+	T extends SyncedTable<object>,
+>(
+	config: PersistedSurrealCollectionOptions<T>,
+): ReturnType<typeof createPersistedOptions<T>>;
+// biome-ignore lint/suspicious/noExplicitAny: the overloads carry the public types.
+export function persistedSurrealCollectionOptions(config: any): any {
+	return createPersistedOptions(config);
 }
 
 declare module '@tanstack/db' {

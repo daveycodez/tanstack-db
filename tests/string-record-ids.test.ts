@@ -166,10 +166,96 @@ describe("recordIds: 'string'", () => {
 		const merged = update?.payload as Record<string, unknown>;
 		expect(merged.orgId).toBeInstanceOf(StringRecordId);
 		expect(String(merged.orgId)).toBe('org:other');
-		expect(merged.note).toBe('org:not-a-link');
+		expect(Object.keys(merged)).toEqual(['orgId']);
 
 		expect(remove).toEqual({ op: 'delete', target: 'user:⟨42⟩' });
 		expect(users.has('user:⟨42⟩')).toBe(false);
+	});
+
+	it('leaves untouched record links out of an update', async () => {
+		const { db, writes } = createMockDb();
+		const users = createCollection(
+			surrealCollectionOptions<User>({
+				db: db as never,
+				table: { name: 'user' },
+				queryClient: new QueryClient(),
+				queryKey: ['user', 'unlisted'],
+				recordIds: 'string',
+			}),
+		);
+		await loadAll(users as never);
+
+		await users.update('user:abc', (draft) => {
+			draft.name = 'Renamed';
+		}).when('settled');
+
+		expect(writes[0]?.payload).toEqual({ name: 'Renamed' });
+		expect(users.get('user:abc')?.orgId).toBe('org:acme');
+	});
+
+	it('converts a nested record link in a partial update', async () => {
+		const { db, writes } = createMockDb();
+		const users = createUsers(db, 'eager', 'nested-update');
+		await loadAll(users);
+
+		await users.update('user:abc', (draft) => {
+			if (draft.meta) draft.meta.manager = 'user:new';
+		}).when('settled');
+
+		const payload = writes[0]?.payload as {
+			meta: { manager: unknown };
+		};
+		expect(Object.keys(payload)).toEqual(['meta']);
+		expect(payload.meta.manager).toBeInstanceOf(StringRecordId);
+		expect(String(payload.meta.manager)).toBe('user:new');
+	});
+
+	it('derives string rows and required fields from a RecordId row type', async () => {
+		type NativeUser = {
+			id: RecordId<'user'>;
+			name: string;
+			orgId: RecordId<'org'>;
+			note: string;
+			meta?: { manager?: RecordId<'user'>; tags?: string[] };
+		};
+		const { db, writes } = createMockDb();
+		const base = {
+			db: db as never,
+			table: { name: 'user' },
+			queryClient: new QueryClient(),
+			recordIds: 'string',
+		} as const;
+
+		// @ts-expect-error every record-link field must be listed
+		surrealCollectionOptions<NativeUser>({
+			...base,
+			queryKey: ['user', 'typed-missing'],
+			recordFields: { orgId: true },
+		});
+		// @ts-expect-error `note` is not a record link
+		surrealCollectionOptions<NativeUser>({
+			...base,
+			queryKey: ['user', 'typed-wrong'],
+			recordFields: { orgId: true, 'meta.manager': true, note: true },
+		});
+
+		const users = createCollection(
+			surrealCollectionOptions<NativeUser>({
+				...base,
+				queryKey: ['user', 'typed'],
+				recordFields: { orgId: true, 'meta.manager': true },
+			}),
+		);
+		const all = createLiveQueryCollection((q) => q.from({ user: users }));
+		await all.preload();
+
+		const orgId: string | undefined = users.get('user:abc')?.orgId;
+		expect(orgId).toBe('org:acme');
+		await users.update('user:abc', (draft) => {
+			draft.orgId = 'org:other';
+		}).when('settled');
+		const payload = writes[0]?.payload as Record<string, unknown>;
+		expect(payload.orgId).toBeInstanceOf(StringRecordId);
 	});
 
 	it('assigns string temp ids to inserts without an id', async () => {

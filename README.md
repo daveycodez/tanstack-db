@@ -146,7 +146,7 @@ type SurrealCollectionOptions<T> = {
 	queryKey: readonly unknown[];
 	syncMode?: 'eager' | 'on-demand' | 'progressive';
 	recordIds?: 'native' | 'string'; // default 'native'
-	recordFields?: readonly string[]; // record-link fields, for recordIds: 'string'
+	recordFields?: readonly string[] | Record<string, true>; // record-link fields, for recordIds: 'string'
 	e2ee?: {
 		enabled: boolean;
 		crypto: CryptoProvider;
@@ -189,7 +189,8 @@ On the way back, the adapter sends the row `id` and the fields listed in
 `recordFields` (dot paths) to SurrealDB as record ids, on writes and in
 pushed-down `where` filters (`eq`, `inArray`, ...). Other string fields are
 left as text, since a string like `org:abc` can be ordinary data. On relation
-tables, `in` and `out` are treated as record fields too.
+tables, `in` and `out` are treated as record fields too. Updates send only the
+fields that changed, so an edit never rewrites a link it did not touch.
 
 ```tsx
 import { eq, useLiveQuery } from '@tanstack/react-db';
@@ -239,8 +240,30 @@ const { data: orgProfiles } = useLiveQuery({
 await profiles.insert({ orgId: 'org:acme', bio: 'Hi' }); // orgId is stored as a record link
 ```
 
-The row type's `id` must be `string` in this mode. Compare against the same
-string form, e.g. `String(recordId)` or `recordId.toString()`.
+Compare against the same string form, e.g. `String(recordId)` or
+`recordId.toString()`.
+
+A record link missing from `recordFields` is sent as plain text, so a filter on
+it matches nothing. To have the compiler catch that, pass a row type that uses
+`RecordId`, such as a generated one. `recordFields` is then a map that must list
+every record link, and the collection's rows use strings:
+
+```ts
+type Profile = { id: RecordId<'profile'>; orgId: RecordId<'org'>; bio: string };
+
+const profiles = createCollection(
+	surrealCollectionOptions<Profile>({
+		db,
+		table: { name: 'profile' },
+		queryClient,
+		queryKey: ['profile'],
+		recordIds: 'string',
+		recordFields: { orgId: true }, // omitting orgId is a type error
+	}),
+);
+
+profiles.get('profile:abc')?.orgId; // string
+```
 
 ## E2EE
 
