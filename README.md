@@ -194,30 +194,21 @@ definitions at runtime, so link fields come from your schema at build time.
 Compile it with SurrealKit, which needs no database connection:
 
 ```bash
-surrealkit compile --out schema.json
+surrealkit compile --out src/schema.json
 ```
 
-Then generate a small table file:
-
-```ts
-// scripts/generate-tables.ts
-import { readFileSync, writeFileSync } from 'node:fs';
-import { tablesFromSchema } from '@surrealdb/tanstack-db';
-
-const schema = JSON.parse(readFileSync('schema.json', 'utf8'));
-writeFileSync(
-	'src/tables.generated.ts',
-	`export const tables = ${JSON.stringify(tablesFromSchema(schema), null, 2)} as const;\n`,
-);
-```
-
-Do not import `schema.json` in client code: it includes access definitions.
-The generated file holds only table names and field paths.
+If your schema uses template variables, pass them with `--var`. Then import the
+document's `tables` and `version` directly. Use named imports with a bundler
+that tree-shakes JSON, such as Vite, so the document's access definitions stay
+out of the client bundle.
 
 ```tsx
+import { surrealCollectionOptions, tablesFromSchema } from '@surrealdb/tanstack-db';
 import { eq, useLiveQuery } from '@tanstack/react-db';
-import { tables } from './tables.generated';
+import { tables as schemaTables, version } from './schema.json';
 import type { Profile } from './schema.generated'; // uses RecordId
+
+const tables = tablesFromSchema({ version, tables: schemaTables });
 
 const profiles = createCollection(
 	surrealCollectionOptions<Profile>({

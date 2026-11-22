@@ -70,8 +70,9 @@ const collectRecordPaths = (
 
 /**
  * Reads table names and record-link fields from a SurrealKit schema document
- * (`surrealkit compile`). Run it at build time and write the result to a file:
- * the document itself holds access definitions and must not reach the client.
+ * (`surrealkit compile`). In client code, pass only the document's `version`
+ * and `tables` through named imports, so its access definitions stay out of
+ * the bundle.
  */
 export function tablesFromSchema(
 	schema: SurrealSchemaDocument,
