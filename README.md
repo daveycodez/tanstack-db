@@ -145,6 +145,8 @@ type SurrealCollectionOptions<T> = {
 	queryClient: QueryClient;
 	queryKey: readonly unknown[];
 	syncMode?: 'eager' | 'on-demand' | 'progressive';
+	recordIds?: 'native' | 'string'; // default 'native'
+	recordFields?: readonly string[]; // record-link fields, for recordIds: 'string'
 	e2ee?: {
 		enabled: boolean;
 		crypto: CryptoProvider;
@@ -168,6 +170,77 @@ type SurrealCollectionOptions<T> = {
 `id` is optional. When omitted, the adapter derives a stable collection id from
 the Surreal table name and `queryKey` so TanStack DB persistence wrappers can
 reuse the same persisted collection state across restarts.
+
+## String record ids
+
+By default rows carry SurrealDB `RecordId` instances. TanStack DB compares
+class instances by reference and cannot hash them for `useLiveQuery`
+dependencies ([TanStack/db#2459](https://github.com/TanStack/db/issues/2459)),
+so a filter like `eq(user.id, userId)` only matches when `userId` is the very
+same object the adapter holds.
+
+Set `recordIds: 'string'` to give TanStack DB plain strings instead. Every
+record id read from SurrealDB (the row `id` and any other field, at any depth)
+becomes its SurrealQL string, exactly `RecordId#toString()`: `user:abc`,
+`user:42` for a number key, `user:⟨42⟩` for the string key `"42"`. The row
+`id` is also the collection key.
+
+On the way back, the adapter sends the row `id` and the fields listed in
+`recordFields` (dot paths) to SurrealDB as record ids, on writes and in
+pushed-down `where` filters (`eq`, `inArray`, ...). Other string fields are
+left as text, since a string like `org:abc` can be ordinary data. On relation
+tables, `in` and `out` are treated as record fields too.
+
+```tsx
+import { eq, useLiveQuery } from '@tanstack/react-db';
+
+type User = { id: string; name: string };
+type Profile = { id: string; orgId: string; bio: string };
+
+const users = createCollection(
+	surrealCollectionOptions<User>({
+		db,
+		table: { name: 'user' },
+		queryClient,
+		queryKey: ['user'],
+		syncMode: 'on-demand',
+		recordIds: 'string',
+	}),
+);
+
+const profiles = createCollection(
+	surrealCollectionOptions<Profile>({
+		db,
+		table: { name: 'profile' },
+		queryClient,
+		queryKey: ['profile'],
+		syncMode: 'on-demand',
+		recordIds: 'string',
+		recordFields: ['orgId'],
+	}),
+);
+
+// e.g. const userId = String(authRecordId) -> 'user:abc'
+const { data: user } = useLiveQuery({
+	query: (q) =>
+		q
+			.from({ user: users })
+			.where(({ user }) => eq(user.id, userId))
+			.findOne(),
+});
+
+const { data: orgProfiles } = useLiveQuery({
+	query: (q) =>
+		q
+			.from({ profile: profiles })
+			.where(({ profile }) => eq(profile.orgId, 'org:acme')),
+});
+
+await profiles.insert({ orgId: 'org:acme', bio: 'Hi' }); // orgId is stored as a record link
+```
+
+The row type's `id` must be `string` in this mode. Compare against the same
+string form, e.g. `String(recordId)` or `recordId.toString()`.
 
 ## E2EE
 

@@ -14,6 +14,7 @@ import { toRecordKeyString } from '../id';
 import {
 	buildLiveCondition,
 	readFieldPath,
+	type SubsetQueryOptions,
 	subsetOrderOf,
 	windowBoundaryOf,
 } from '../table';
@@ -71,6 +72,8 @@ export type LiveSubsetsConfig<T extends { id: string | RecordId }> = {
 	writeRows: (rows: T[]) => Promise<void>;
 	evict: (ids: string[]) => Promise<void>;
 	syncedRows: () => Iterable<T>;
+	idOf?: (id: string | RecordId) => string;
+	queryOptions?: SubsetQueryOptions;
 	invalidate: () => void;
 	onError?: (error: unknown) => void;
 };
@@ -139,6 +142,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 	const tableResource = new Table(table.name);
 	const entries = new Map<string, Entry>();
 	const report = (error: unknown) => config.onError?.(error);
+	const idOf = config.idOf ?? toRecordKeyString;
 
 	const liveSupported = async (): Promise<boolean> => {
 		try {
@@ -170,7 +174,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		if (entry.closed) return;
 		const raw = message.value;
 		if (!raw || raw.id === undefined) return;
-		const id = toRecordKeyString(raw.id as string | RecordId);
+		const id = idOf(raw.id as string | RecordId);
 
 		if (message.action === 'DELETE') {
 			tracker.deleteId(id);
@@ -242,7 +246,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			);
 		const missing: string[] = [];
 		for (const row of syncedRows()) {
-			const id = toRecordKeyString(row.id);
+			const id = idOf(row.id);
 			if (!tracker.has(id) && entry.surelyMatches(row) && inRange(row)) {
 				missing.push(id);
 			}
@@ -260,7 +264,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		if (stale()) return;
 
 		const previous = [...tracker.idsOf(entry.key)];
-		const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
+		const ids = new Set(rows.map((row) => idOf(row.id)));
 		// Without a session a result can't prove a row is gone, but it can still
 		// hold public rows. Merge it, and let the resync on sign-in reconcile.
 		const authoritative = !signedOut;
@@ -288,7 +292,12 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			const live = (await liveSupported())
 				? await openLive(
 						entry,
-						buildLiveCondition(table, entry.options),
+						buildLiveCondition(
+							table,
+							entry.options,
+							undefined,
+							config.queryOptions,
+						),
 					)
 				: undefined;
 			if (live) opened.push(live);
@@ -302,7 +311,12 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			if (live && boundary) {
 				const bounded = await openLive(
 					entry,
-					buildLiveCondition(table, entry.options, boundary),
+					buildLiveCondition(
+						table,
+						entry.options,
+						boundary,
+						config.queryOptions,
+					),
 				);
 				if (bounded) {
 					opened.push(bounded);

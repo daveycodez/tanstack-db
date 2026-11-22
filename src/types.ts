@@ -97,7 +97,27 @@ export type SurrealCollectionOptions<T extends object> = Omit<
 	e2ee?: SurrealE2EEOptions;
 	crdt?: SurrealCRDTOptions<T>;
 	onError?: (error: unknown) => void;
+	/**
+	 * How record ids are represented in the rows TanStack DB sees.
+	 *
+	 * - `'native'` (default): `RecordId` instances.
+	 * - `'string'`: plain strings in SurrealQL form (`RecordId#toString()`,
+	 *   e.g. `user:abc`, `user:42`, `user:⟨42⟩`), so they compare by value in
+	 *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the fields in
+	 *   `recordFields` are converted back to record ids when sent to SurrealDB.
+	 *   Requires the row type's `id` to be a `string`.
+	 */
+	recordIds?: [T] extends [{ id: string }] ? RecordIdMode : 'native';
+	/**
+	 * Fields (dot paths, e.g. `orgId` or `meta.owner`) holding record links,
+	 * used with `recordIds: 'string'`. Their string values are sent to
+	 * SurrealDB as record ids on writes and in pushed-down `where` filters.
+	 * `id` is always treated as a record id; `in`/`out` are too on relations.
+	 */
+	recordFields?: readonly string[];
 };
+
+export type RecordIdMode = 'native' | 'string';
 
 export type PersistedSurrealCollectionOptions<T extends object> =
 	SurrealCollectionOptions<T> & {

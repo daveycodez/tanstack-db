@@ -14,6 +14,7 @@ import {
 	toRecordId,
 } from './id';
 import { firstRow } from './internal/records';
+import { toSurrealRecordId } from './internal/string-ids';
 import type { SurrealSubset, TableOptions } from './types';
 
 type QueryResult<T> = T[] | null;
@@ -100,6 +101,28 @@ const joinLogical = (op: 'AND' | 'OR', args: Array<unknown>): SqlFragment => {
 
 type BindParam = (value: unknown) => string;
 
+export type SubsetQueryOptions = {
+	/**
+	 * When set, values compared against these fields (dot paths, including
+	 * `id`) are sent as record ids and all other values are sent unchanged.
+	 * Used by `recordIds: 'string'`.
+	 */
+	recordFields?: ReadonlySet<string>;
+};
+
+const filterValueFor = (
+	table: TableOptions,
+	options: SubsetQueryOptions,
+	fieldPath: unknown,
+	value: unknown,
+): unknown => {
+	if (!options.recordFields) return normalizeFilterValue(value);
+	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
+	return options.recordFields.has(path.join('.'))
+		? toSurrealRecordId(value)
+		: value;
+};
+
 type WhereExpression = NonNullable<SurrealSubset['where']>;
 
 export type SubsetOrder = {
@@ -114,7 +137,10 @@ const whereSqlFrom = (
 	expr: WhereExpression,
 	bind: BindParam,
 	scope?: string,
+	options: SubsetQueryOptions = {},
 ): string => {
+	const filterValue = (fieldPath: unknown, value: unknown) =>
+		filterValueFor(table, options, fieldPath, value);
 	const fieldSql = (fieldPath: unknown): string => {
 		const field = formatFieldPath(
 			mapRelationPath(toFieldPath(fieldPath), table.relation),
@@ -142,7 +168,7 @@ const whereSqlFrom = (
 			);
 		}
 		return {
-			sql: `${field} ${op} ${bind(normalizeFilterValue(value))}`,
+			sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}`,
 		};
 	};
 
@@ -159,7 +185,7 @@ const whereSqlFrom = (
 			like: (field, value) => comparison(field, 'LIKE', value),
 			ilike: (field, value) => {
 				const f = fieldSql(field);
-				const p = bind(normalizeFilterValue(value));
+				const p = bind(filterValue(field, value));
 				return {
 					sql: `string::lower(${f}) LIKE string::lower(${p})`,
 				};
@@ -170,7 +196,7 @@ const whereSqlFrom = (
 					return { sql: 'false' };
 				}
 				return {
-					sql: `${f} IN ${bind(normalizeFilterValue(value))}`,
+					sql: `${f} IN ${bind(filterValue(field, value))}`,
 				};
 			},
 			isNull: (field) => ({ sql: `${fieldSql(field)} IS NULL` }),
@@ -197,9 +223,10 @@ const filterSqlFrom = (
 	subset: SurrealSubset | undefined,
 	bind: BindParam,
 	scope?: string,
+	options: SubsetQueryOptions = {},
 ): string[] =>
 	subsetFilters(subset)
-		.map((expr) => whereSqlFrom(table, expr, bind, scope))
+		.map((expr) => whereSqlFrom(table, expr, bind, scope, options))
 		.filter(Boolean);
 
 const isOrdered = (subset?: SurrealSubset): boolean =>
@@ -250,20 +277,25 @@ export const windowBoundaryOf = (
 };
 
 const boundarySql = (
+	table: TableOptions,
 	boundary: WindowBoundary,
 	bind: BindParam,
 	scope?: string,
+	options: SubsetQueryOptions = {},
 ): string => {
 	const path = formatFieldPath(boundary.field);
 	const field = scope ? `${scope}.${path}` : path;
 	const op = boundary.direction === 'desc' ? '>=' : '<=';
-	const value = bind(normalizeFilterValue(boundary.value));
+	const value = bind(
+		filterValueFor(table, options, boundary.field, boundary.value),
+	);
 	return `${field} ${op} ${value} OR ${field} IS NONE OR ${field} IS NULL`;
 };
 
 export const buildSubsetQuery = (
 	table: TableOptions,
 	subset?: SurrealSubset,
+	options: SubsetQueryOptions = {},
 ): { sql: string; params: Record<string, unknown> } => {
 	let paramIdx = 0;
 	const params: Record<string, unknown> = { table: table.name };
@@ -273,7 +305,13 @@ export const buildSubsetQuery = (
 		return `$${key}`;
 	};
 
-	const whereParts = filterSqlFrom(table, subset, nextParam);
+	const whereParts = filterSqlFrom(
+		table,
+		subset,
+		nextParam,
+		undefined,
+		options,
+	);
 	const whereSql = whereParts.length
 		? ` WHERE ${whereParts.map((part) => `(${part})`).join(' AND ')}`
 		: '';
@@ -306,10 +344,13 @@ export const buildLiveCondition = (
 	table: TableOptions,
 	subset?: SurrealSubset,
 	boundary?: WindowBoundary,
+	options: SubsetQueryOptions = {},
 ): Expr | undefined => {
 	const scoped = (bind: BindParam, scope?: string): string[] => {
-		const parts = filterSqlFrom(table, subset, bind, scope);
-		if (boundary) parts.push(boundarySql(boundary, bind, scope));
+		const parts = filterSqlFrom(table, subset, bind, scope, options);
+		if (boundary) {
+			parts.push(boundarySql(table, boundary, bind, scope, options));
+		}
 		return parts;
 	};
 	if (!subsetFilters(subset).length && !boundary) return undefined;
@@ -328,6 +369,7 @@ export const buildLiveCondition = (
 export function manageTable<T extends { id: string | RecordId }>(
 	db: Surreal,
 	config: TableOptions,
+	subsetQueryOptions?: SubsetQueryOptions,
 ) {
 	const { name } = config;
 	const table = new Table(name);
@@ -337,7 +379,11 @@ export function manageTable<T extends { id: string | RecordId }>(
 	};
 
 	const loadSubset = async (subset?: SurrealSubset): Promise<T[]> => {
-		const { sql, params } = buildSubsetQuery(config, subset);
+		const { sql, params } = buildSubsetQuery(
+			config,
+			subset,
+			subsetQueryOptions,
+		);
 		const [res] = await db.query<[QueryResult<T>]>(sql, params);
 		return res ?? [];
 	};
