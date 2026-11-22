@@ -25,6 +25,12 @@ export type SyncedTable<T> = WithId<
 export type TableOptions = {
 	name: string;
 	relation?: boolean;
+	/**
+	 * Fields (dot paths, e.g. `orgId` or `meta.owner`) holding record links,
+	 * used with `recordIds: 'string'`. Generate these with `tablesFromSchema`.
+	 * `id` is always a record id, and so are `in`/`out` on relations.
+	 */
+	recordFields?: readonly string[];
 };
 
 export type TableLike = Table | TableOptions | string;
@@ -103,28 +109,16 @@ export type SurrealCollectionOptions<T extends object> = Omit<
 	 * - `'native'` (default): `RecordId` instances.
 	 * - `'string'`: plain strings in SurrealQL form (`RecordId#toString()`,
 	 *   e.g. `user:abc`, `user:42`, `user:⟨42⟩`), so they compare by value in
-	 *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the fields in
+	 *   `eq(...)` and hash in `useLiveQuery`. The row `id` and the table's
 	 *   `recordFields` are converted back to record ids when sent to SurrealDB.
 	 *   Pass a row type with `RecordId` fields (such as a generated one) to
-	 *   have `recordFields` checked at compile time, or a row type whose `id`
-	 *   is already a `string`.
+	 *   require a table with `recordFields`, or a row type whose `id` is
+	 *   already a `string`.
 	 */
 	recordIds?: [T] extends [{ id: string }] ? RecordIdMode : 'native';
-	/**
-	 * Fields (dot paths, e.g. `orgId` or `meta.owner`) holding record links,
-	 * used with `recordIds: 'string'`. Their string values are sent to
-	 * SurrealDB as record ids on writes and in pushed-down `where` filters.
-	 * `id` is always treated as a record id; `in`/`out` are too on relations.
-	 */
-	recordFields?: RecordFieldsInput;
 };
 
 export type RecordIdMode = 'native' | 'string';
-
-/** Record-link fields, as a list or as a `{ path: true }` map. */
-export type RecordFieldsInput =
-	| readonly string[]
-	| Readonly<Record<string, true>>;
 
 // biome-ignore lint/suspicious/noExplicitAny: matches every RecordId instantiation.
 type AnyRecordId = RecordId<any, any, any>;
@@ -183,15 +177,10 @@ export type RecordFieldPath<T> = {
 	>;
 }[Exclude<keyof T & string, 'id' | 'in' | 'out'>];
 
-/** Requires a `recordFields` entry for every record-link field of `T`. */
-export type RequiredRecordFields<T> = [RecordFieldPath<T>] extends [never]
-	? { recordFields?: Readonly<Partial<Record<'in' | 'out', true>>> }
-	: {
-			recordFields: Readonly<
-				Record<RecordFieldPath<T>, true> &
-					Partial<Record<'in' | 'out', true>>
-			>;
-		};
+/** Requires a table with `recordFields` when `T` has record-link fields. */
+export type StringRecordTable<T> = [RecordFieldPath<T>] extends [never]
+	? TableLike
+	: TableOptions & { recordFields: readonly string[] };
 
 /** The row TanStack DB sees for `T` in `recordIds: 'string'` mode. */
 export type StringRecordRow<T> = StringRecordIds<T> & { id: string };
@@ -199,8 +188,8 @@ export type StringRecordRow<T> = StringRecordIds<T> & { id: string };
 /** Options for a row type with `RecordId` fields in `recordIds: 'string'` mode. */
 export type StringRecordCollectionOptions<T extends object> = Omit<
 	SurrealCollectionOptions<StringRecordRow<T>>,
-	'recordIds' | 'recordFields'
-> & { recordIds: 'string' } & RequiredRecordFields<T>;
+	'recordIds' | 'table'
+> & { recordIds: 'string'; table: StringRecordTable<T> };
 
 export type PersistedStringRecordCollectionOptions<T extends object> =
 	StringRecordCollectionOptions<T> & {

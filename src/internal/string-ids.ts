@@ -19,6 +19,11 @@ export const stringifyRecordIdsDeep = <T>(value: T): T => {
 	if (Array.isArray(value)) {
 		return value.map((item) => stringifyRecordIdsDeep(item)) as T;
 	}
+	if (value instanceof Set) {
+		return new Set(
+			[...value].map((item) => stringifyRecordIdsDeep(item)),
+		) as T;
+	}
 	if (isPlainObject(value)) {
 		const out: Record<string, unknown> = {};
 		for (const [k, v] of Object.entries(value)) {
@@ -53,6 +58,7 @@ export const toTableRecordIdString = (
 export const toSurrealRecordId = (value: unknown): unknown => {
 	if (typeof value === 'string') return new StringRecordId(value);
 	if (Array.isArray(value)) return value.map(toSurrealRecordId);
+	if (value instanceof Set) return new Set([...value].map(toSurrealRecordId));
 	return value;
 };
 
@@ -63,6 +69,11 @@ const convertPath = (
 ): unknown => {
 	if (Array.isArray(value) && path.length > 0) {
 		return value.map((item) => convertPath(item, path, convert));
+	}
+	if (value instanceof Set && path.length > 0) {
+		return new Set(
+			[...value].map((item) => convertPath(item, path, convert)),
+		);
 	}
 	if (path.length === 0) return convert(value);
 	if (!isPlainObject(value)) return value;

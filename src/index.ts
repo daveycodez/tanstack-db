@@ -84,6 +84,7 @@ import { fromBase64, fromBytes, toBase64, toBytes } from './util';
 export * from './crdt';
 export * from './encryption';
 export { toRecordKeyString } from './id';
+export * from './schema';
 export * from './types';
 
 const NOOP = () => {};
@@ -147,7 +148,6 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		crdt,
 		syncMode: inputSyncMode,
 		recordIds: recordIdMode = 'native',
-		recordFields: inputRecordFields = [],
 	} = config;
 
 	if (!queryClient || !queryKey) {
@@ -168,9 +168,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	const recordFields = [
 		'id',
 		...(tableOptions.relation ? ['in', 'out'] : []),
-		...(Array.isArray(inputRecordFields)
-			? (inputRecordFields as readonly string[])
-			: Object.keys(inputRecordFields)),
+		...(tableOptions.recordFields ?? []),
 	];
 	const collectionId = config.id ?? deriveCollectionId(tableName, queryKey);
 	const tableResource = toTableResource(table);

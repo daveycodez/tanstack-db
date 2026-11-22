@@ -141,12 +141,11 @@ collection
 type SurrealCollectionOptions<T> = {
 	id?: string;
 	db: Surreal;
-	table: Table | { name: string; relation?: boolean } | string;
+	table: Table | { name: string; relation?: boolean; recordFields?: readonly string[] } | string;
 	queryClient: QueryClient;
 	queryKey: readonly unknown[];
 	syncMode?: 'eager' | 'on-demand' | 'progressive';
 	recordIds?: 'native' | 'string'; // default 'native'
-	recordFields?: readonly string[] | Record<string, true>; // record-link fields, for recordIds: 'string'
 	e2ee?: {
 		enabled: boolean;
 		crypto: CryptoProvider;
@@ -185,50 +184,51 @@ becomes its SurrealQL string, exactly `RecordId#toString()`: `user:abc`,
 `user:42` for a number key, `user:⟨42⟩` for the string key `"42"`. The row
 `id` is also the collection key.
 
-On the way back, the adapter sends the row `id` and the fields listed in
-`recordFields` (dot paths) to SurrealDB as record ids, on writes and in
-pushed-down `where` filters (`eq`, `inArray`, ...). Other string fields are
-left as text, since a string like `org:abc` can be ordinary data. On relation
-tables, `in` and `out` are treated as record fields too. Updates send only the
-fields that changed, so an edit never rewrites a link it did not touch.
+On the way back, the adapter sends the row `id` and the table's record-link
+fields to SurrealDB as record ids, on writes and in pushed-down `where` filters
+(`eq`, `inArray`, ...). Other string fields stay text, since a string like
+`org:abc` can be ordinary data. Updates send only the fields that changed.
+
+A string does not say whether it is a link, and record users cannot read table
+definitions at runtime, so link fields come from your schema at build time.
+Compile it with SurrealKit, which needs no database connection:
+
+```bash
+surrealkit compile --out schema.json
+```
+
+Then generate a small table file:
+
+```ts
+// scripts/generate-tables.ts
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tablesFromSchema } from '@surrealdb/tanstack-db';
+
+const schema = JSON.parse(readFileSync('schema.json', 'utf8'));
+writeFileSync(
+	'src/tables.generated.ts',
+	`export const tables = ${JSON.stringify(tablesFromSchema(schema), null, 2)} as const;\n`,
+);
+```
+
+Do not import `schema.json` in client code: it includes access definitions.
+The generated file holds only table names and field paths.
 
 ```tsx
 import { eq, useLiveQuery } from '@tanstack/react-db';
-
-type User = { id: string; name: string };
-type Profile = { id: string; orgId: string; bio: string };
-
-const users = createCollection(
-	surrealCollectionOptions<User>({
-		db,
-		table: { name: 'user' },
-		queryClient,
-		queryKey: ['user'],
-		syncMode: 'on-demand',
-		recordIds: 'string',
-	}),
-);
+import { tables } from './tables.generated';
+import type { Profile } from './schema.generated'; // uses RecordId
 
 const profiles = createCollection(
 	surrealCollectionOptions<Profile>({
 		db,
-		table: { name: 'profile' },
+		table: tables.profile,
 		queryClient,
 		queryKey: ['profile'],
 		syncMode: 'on-demand',
 		recordIds: 'string',
-		recordFields: ['orgId'],
 	}),
 );
-
-// e.g. const userId = String(authRecordId) -> 'user:abc'
-const { data: user } = useLiveQuery({
-	query: (q) =>
-		q
-			.from({ user: users })
-			.where(({ user }) => eq(user.id, userId))
-			.findOne(),
-});
 
 const { data: orgProfiles } = useLiveQuery({
 	query: (q) =>
@@ -237,33 +237,16 @@ const { data: orgProfiles } = useLiveQuery({
 			.where(({ profile }) => eq(profile.orgId, 'org:acme')),
 });
 
-await profiles.insert({ orgId: 'org:acme', bio: 'Hi' }); // orgId is stored as a record link
+await profiles.insert({ orgId: 'org:acme', bio: 'Hi' }); // stored as a record link
 ```
 
-Compare against the same string form, e.g. `String(recordId)` or
-`recordId.toString()`.
+With a `RecordId` row type, the collection's rows use strings, and a table
+without `recordFields` is a type error when the row has record links. Compare
+against the string form, e.g. `String(recordId)`.
 
-A record link missing from `recordFields` is sent as plain text, so a filter on
-it matches nothing. To have the compiler catch that, pass a row type that uses
-`RecordId`, such as a generated one. `recordFields` is then a map that must list
-every record link, and the collection's rows use strings:
-
-```ts
-type Profile = { id: RecordId<'profile'>; orgId: RecordId<'org'>; bio: string };
-
-const profiles = createCollection(
-	surrealCollectionOptions<Profile>({
-		db,
-		table: { name: 'profile' },
-		queryClient,
-		queryKey: ['profile'],
-		recordIds: 'string',
-		recordFields: { orgId: true }, // omitting orgId is a type error
-	}),
-);
-
-profiles.get('profile:abc')?.orgId; // string
-```
+`tablesFromSchema` throws on a field typed as both a record and a string, since
+those values cannot be told apart. Links inside undeclared `FLEXIBLE` object
+keys are not in the schema, so they are read as strings and written as text.
 
 ## E2EE
 

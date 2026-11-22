@@ -9,6 +9,10 @@ import { QueryClient } from '@tanstack/query-core';
 import { RecordId, StringRecordId } from 'surrealdb';
 
 import { surrealCollectionOptions } from '../src/index';
+import {
+	recordFieldsToSurreal,
+	stringifyRecordIdsDeep,
+} from '../src/internal/string-ids';
 
 type User = {
 	id: string;
@@ -77,12 +81,11 @@ const createUsers = (
 	createCollection(
 		surrealCollectionOptions<User>({
 			db: db as never,
-			table: { name: 'user' },
+			table: { name: 'user', recordFields: ['orgId', 'meta.manager'] },
 			queryClient: new QueryClient(),
 			queryKey: ['user', queryKey],
 			syncMode,
 			recordIds: 'string',
-			recordFields: ['orgId', 'meta.manager'],
 		}),
 	);
 
@@ -131,7 +134,7 @@ describe("recordIds: 'string'", () => {
 		expect(byOrg.toArray.map((row) => row.name)).toEqual(['Alice']);
 	});
 
-	it('sends record ids for id and recordFields on writes', async () => {
+	it('sends record ids for id and record fields on writes', async () => {
 		const { db, writes } = createMockDb();
 		const users = createUsers(db, 'eager', 'write');
 		await loadAll(users);
@@ -172,6 +175,18 @@ describe("recordIds: 'string'", () => {
 		expect(users.has('user:⟨42⟩')).toBe(false);
 	});
 
+	it('converts record ids inside a Set in both directions', () => {
+		const read = stringifyRecordIdsDeep({
+			uniq: new Set([new RecordId('org', 'acme')]),
+		});
+		expect([...read.uniq]).toEqual(['org:acme'] as never);
+
+		const written = recordFieldsToSurreal(read, ['uniq']);
+		const [link] = [...written.uniq];
+		expect(link).toBeInstanceOf(StringRecordId);
+		expect(String(link)).toBe('org:acme');
+	});
+
 	it('leaves untouched record links out of an update', async () => {
 		const { db, writes } = createMockDb();
 		const users = createCollection(
@@ -210,7 +225,7 @@ describe("recordIds: 'string'", () => {
 		expect(String(payload.meta.manager)).toBe('user:new');
 	});
 
-	it('derives string rows and required fields from a RecordId row type', async () => {
+	it('derives string rows and requires record fields for a RecordId row type', async () => {
 		type NativeUser = {
 			id: RecordId<'user'>;
 			name: string;
@@ -221,29 +236,22 @@ describe("recordIds: 'string'", () => {
 		const { db, writes } = createMockDb();
 		const base = {
 			db: db as never,
-			table: { name: 'user' },
 			queryClient: new QueryClient(),
 			recordIds: 'string',
 		} as const;
 
-		// @ts-expect-error every record-link field must be listed
+		// @ts-expect-error a row with record links needs a generated table
 		surrealCollectionOptions<NativeUser>({
 			...base,
+			table: { name: 'user' },
 			queryKey: ['user', 'typed-missing'],
-			recordFields: { orgId: true },
-		});
-		// @ts-expect-error `note` is not a record link
-		surrealCollectionOptions<NativeUser>({
-			...base,
-			queryKey: ['user', 'typed-wrong'],
-			recordFields: { orgId: true, 'meta.manager': true, note: true },
 		});
 
 		const users = createCollection(
 			surrealCollectionOptions<NativeUser>({
 				...base,
+				table: { name: 'user', recordFields: ['orgId', 'meta.manager'] },
 				queryKey: ['user', 'typed'],
-				recordFields: { orgId: true, 'meta.manager': true },
 			}),
 		);
 		const all = createLiveQueryCollection((q) => q.from({ user: users }));
