@@ -64,6 +64,7 @@ import type {
 	AADContext,
 	AdapterSyncMode,
 	LocalChange,
+	PersistedOnlyCollectionOptions,
 	PersistedSurrealCollectionOptions,
 	SurrealCollectionOptions,
 	SurrealCollectionOptionsReturn,
@@ -989,10 +990,49 @@ export function surrealCollectionOptions<T extends SyncedTable<object>>(
 	return modernSurrealCollectionOptions(config);
 }
 
+// Every key of PersistedOnlyCollectionOptions. The type check below fails if
+// `persistedCollectionOptions` gains an option that isn't listed here, so it
+// can't be silently dropped again.
+const PERSISTED_ONLY_OPTION_KEYS = [
+	'persistence',
+	'schemaVersion',
+	'initialRender',
+] as const satisfies ReadonlyArray<keyof PersistedOnlyCollectionOptions>;
+type AssertNever<T extends never> = T;
+type _AllPersistedOnlyOptionKeysListed = AssertNever<
+	Exclude<
+		keyof PersistedOnlyCollectionOptions,
+		(typeof PERSISTED_ONLY_OPTION_KEYS)[number]
+	>
+>;
+
+function splitPersistedOptions<T extends object>(
+	config: PersistedSurrealCollectionOptions<T>,
+): {
+	persistedOptions: PersistedOnlyCollectionOptions;
+	surrealConfig: SurrealCollectionOptions<T>;
+} {
+	const persistedOptions: Record<string, unknown> = {};
+	const surrealConfig: Record<string, unknown> = {};
+	const persistedKeys: ReadonlySet<string> = new Set(
+		PERSISTED_ONLY_OPTION_KEYS,
+	);
+	for (const [key, value] of Object.entries(config)) {
+		const target = persistedKeys.has(key)
+			? persistedOptions
+			: surrealConfig;
+		target[key] = value;
+	}
+	return {
+		persistedOptions: persistedOptions as PersistedOnlyCollectionOptions,
+		surrealConfig: surrealConfig as SurrealCollectionOptions<T>,
+	};
+}
+
 export function persistedSurrealCollectionOptions<
 	T extends SyncedTable<object>,
 >(config: PersistedSurrealCollectionOptions<T>) {
-	const { persistence, schemaVersion, ...surrealConfig } = config;
+	const { persistedOptions, surrealConfig } = splitPersistedOptions(config);
 
 	type Schema = StandardSchemaV1<Omit<T, 'id'> & { id?: T['id'] }, T>;
 	// InferSchemaOutput<Schema> is T at runtime, but TypeScript can't resolve the
@@ -1007,8 +1047,7 @@ export function persistedSurrealCollectionOptions<
 	> & { schema: Schema; utils: UtilsRecord };
 
 	return persistedCollectionOptions<Schema, string, UtilsRecord>({
-		persistence,
-		schemaVersion,
+		...persistedOptions,
 		...options,
 	});
 }

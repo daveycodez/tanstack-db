@@ -135,6 +135,27 @@ You only need one `openBrowserWASQLiteOPFSDatabase(...)` call and one
 `createBrowserWASQLitePersistence(...)` call per browser app, not per
 collection
 
+`persistedSurrealCollectionOptions(...)` forwards every persisted-collection
+option to `persistedCollectionOptions(...)`, including `initialRender`. With
+`strategy: 'network-first'`, a collection waits for the server first and falls
+back to the rows it has persisted locally when the server doesn't answer within
+`networkTimeoutMs` (for example while offline):
+
+```ts
+export const todos = createCollection(
+	persistedSurrealCollectionOptions<Todo>({
+		persistence,
+		schemaVersion: 1,
+		initialRender: { strategy: 'network-first', networkTimeoutMs: 3000 },
+		db,
+		table: { name: 'todo' },
+		queryClient,
+		queryKey: ['todo'],
+		syncMode: 'on-demand',
+	}),
+);
+```
+
 ## Adapter API
 
 ```ts
