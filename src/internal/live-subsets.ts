@@ -136,8 +136,10 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 	const entries = new Map<string, Entry>();
 	const report = (error: unknown) => config.onError?.(error);
 
-	const liveSupported = (): boolean => {
+	const liveSupported = async (): Promise<boolean> => {
 		try {
+			// Feature support is unknown until the connection is ready.
+			await (db as unknown as { ready?: Promise<void> }).ready;
 			return db.isFeatureSupported?.(Features.LiveQueries) === true;
 		} catch {
 			return false;
@@ -265,7 +267,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		entry.loading = true;
 
 		try {
-			const live = liveSupported()
+			const live = (await liveSupported())
 				? await openLive(
 						entry,
 						buildLiveCondition(table, entry.options),

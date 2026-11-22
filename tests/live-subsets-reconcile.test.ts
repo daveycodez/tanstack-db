@@ -48,6 +48,52 @@ const setup = (server: Item[], cached: Item[]) => {
 
 const keys = (items: ReturnType<typeof setup>) => [...items.keys()].sort();
 
+describe('on-demand LIVE startup', () => {
+	it('opens LIVE after a connection that was still pending', async () => {
+		let connected = false;
+		let finishConnecting = () => {};
+		let opened = 0;
+		const db = {
+			ready: new Promise<void>((resolve) => {
+				finishConnecting = () => {
+					connected = true;
+					resolve();
+				};
+			}),
+			isFeatureSupported: () => connected,
+			query: async () => [[item('keep', 'a', 1)]],
+			live: () => {
+				const live = { subscribe: () => {}, kill: async () => {} };
+				opened += 1;
+				return {
+					where: async () => live,
+					then: (resolve: (value: typeof live) => unknown) =>
+						Promise.resolve(live).then(resolve),
+				};
+			},
+		};
+		const items = createCollection(
+			surrealCollectionOptions<Item>({
+				db: db as never,
+				table: { name: 'item' },
+				queryClient: new QueryClient(),
+				queryKey: ['item', crypto.randomUUID()],
+				syncMode: 'on-demand',
+			}),
+		);
+		const query = createLiveQueryCollection((q) =>
+			q.from({ item: items }).where(({ item }) => eq(item.group, 'a')),
+		);
+		const loading = query.preload();
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(opened).toBe(0);
+
+		finishConnecting();
+		await loading;
+		expect(opened).toBe(1);
+	});
+});
+
 describe('on-demand snapshot reconciliation', () => {
 	it('removes a cached row the server no longer returns', async () => {
 		const keep = item('keep', 'a', 1);
