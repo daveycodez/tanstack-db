@@ -62,7 +62,9 @@ import {
 import { manageTable } from './table';
 import type {
 	AADContext,
+	AdapterOwnedCollectionOptionKey,
 	AdapterSyncMode,
+	ForwardedCollectionOptionKey,
 	LocalChange,
 	PersistedOnlyCollectionOptions,
 	PersistedSurrealCollectionOptions,
@@ -124,6 +126,41 @@ type BaseSyncRuntime = {
 	loadSubset: (subset: LoadSubsetOptions) => Promise<void>;
 	unloadSubset: (subset: LoadSubsetOptions) => void;
 };
+
+// Every standard collection option is either forwarded or owned by the adapter.
+// The type checks below fail if TanStack DB gains an option that is in neither
+// list, or if this array misses a forwarded key, so options aren't silently dropped.
+const FORWARDED_COLLECTION_OPTION_KEYS = [
+	'gcTime',
+	'startSync',
+	'autoIndex',
+	'defaultIndexType',
+	'compare',
+	'defaultStringCollation',
+] as const satisfies ReadonlyArray<ForwardedCollectionOptionKey>;
+type AssertNever<T extends never> = T;
+type _AllForwardedCollectionOptionKeysListed = AssertNever<
+	Exclude<
+		ForwardedCollectionOptionKey,
+		(typeof FORWARDED_COLLECTION_OPTION_KEYS)[number]
+	>
+>;
+type _AllCollectionOptionKeysClassified = AssertNever<
+	Exclude<
+		keyof CollectionConfig<object, string>,
+		ForwardedCollectionOptionKey | AdapterOwnedCollectionOptionKey
+	>
+>;
+
+function pickForwardedCollectionOptions<T extends object>(
+	config: SurrealCollectionOptions<T>,
+): Partial<Pick<CollectionConfig<T, string>, ForwardedCollectionOptionKey>> {
+	const options: Record<string, unknown> = {};
+	for (const key of FORWARDED_COLLECTION_OPTION_KEYS) {
+		if (config[key] !== undefined) options[key] = config[key];
+	}
+	return options;
+}
 
 function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	config: SurrealCollectionOptions<T>,
@@ -645,6 +682,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	};
 
 	const base = queryCollectionOptions({
+		...pickForwardedCollectionOptions(config),
 		id: collectionId,
 		schema: createInsertSchema<T>(tableName),
 		getKey,
@@ -998,7 +1036,6 @@ const PERSISTED_ONLY_OPTION_KEYS = [
 	'schemaVersion',
 	'initialRender',
 ] as const satisfies ReadonlyArray<keyof PersistedOnlyCollectionOptions>;
-type AssertNever<T extends never> = T;
 type _AllPersistedOnlyOptionKeysListed = AssertNever<
 	Exclude<
 		keyof PersistedOnlyCollectionOptions,

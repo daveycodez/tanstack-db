@@ -183,8 +183,22 @@ type SurrealCollectionOptions<T> = {
 		actor?: string | ((ctx: { id: string; change?: { type: 'insert'|'update'|'delete'; value: T } }) => string | undefined);
 		localActorId?: string; // deprecated
 	};
+	// Standard TanStack DB collection options, passed through unchanged.
+	gcTime?: number;
+	startSync?: boolean;
+	autoIndex?: 'off' | 'eager';
+	defaultIndexType?: IndexConstructor<string>;
+	compare?: (x: T, y: T) => number;
+	defaultStringCollation?: StringCollationConfig;
 };
 ```
+
+The standard collection options above are forwarded to the underlying query
+collection, with the same meaning as in `queryCollectionOptions` (there,
+`gcTime` is the query's `gcTime`). The adapter sets `getKey`, `schema`, `sync`,
+`onInsert`, `onUpdate`, `onDelete` and `utils` itself, so they aren't accepted
+as options; `id` and `syncMode` are adapter options with the behaviour
+described here.
 
 `id` is optional. When omitted, the adapter derives a stable collection id from
 the Surreal table name and `queryKey` so TanStack DB persistence wrappers can
