@@ -16,7 +16,10 @@ import type {
 } from '@tanstack/db';
 import { persistedCollectionOptions } from '@tanstack/db-sqlite-persistence-core';
 import type { QueryFunctionContext } from '@tanstack/query-core';
-import { queryCollectionOptions } from '@tanstack/query-db-collection';
+import {
+	DeleteOperationItemNotFoundError,
+	queryCollectionOptions,
+} from '@tanstack/query-db-collection';
 import { LoroDoc } from 'loro-crdt';
 import { Features, RecordId } from 'surrealdb';
 import { createLoroProfile } from './crdt';
@@ -82,7 +85,7 @@ type Cleanup = () => void;
 
 type QueryWriteUtils = {
 	writeUpsert?: (data: unknown) => void;
-	writeDelete?: (key: string) => void;
+	writeDelete?: (key: string) => unknown;
 };
 
 type CRDTUpdateRow = {
@@ -643,6 +646,19 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		};
 	};
 
+	// A LIVE DELETE can remove the row before the delete request returns, so a
+	// row that is already gone is expected here.
+	const writeDeleteIfPresent = (
+		writeUtils: ReturnType<typeof getWriteUtils>,
+		key: string,
+	) => {
+		void (async () => writeUtils.writeDelete?.(key))().catch((error) => {
+			if (error instanceof DeleteOperationItemNotFoundError) return;
+			if (!onError) throw error;
+			onError(error);
+		});
+	};
+
 	const base = queryCollectionOptions({
 		id: collectionId,
 		schema: createInsertSchema<T>(tableName),
@@ -840,7 +856,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				const id = toRecordKeyString(mutationId);
 				if (!crdtEnabled) {
 					await db.delete(mutationId);
-					writeUtils.writeDelete?.(`${tableName}:${id}`);
+					writeDeleteIfPresent(writeUtils, `${tableName}:${id}`);
 					continue;
 				}
 
@@ -853,7 +869,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				applyCrdtLocalChange(doc, localChange);
 				const bytes = doc.export({ mode: 'update', from: vv });
 				await persistCrdtUpdate(id, bytes, localChange);
-				writeUtils.writeDelete?.(`${tableName}:${id}`);
+				writeDeleteIfPresent(writeUtils, `${tableName}:${id}`);
 			}
 		}) as DeleteMutationFn<T, string, UtilsRecord>,
 	} as never) as unknown as SurrealCollectionOptionsReturn<T>;
