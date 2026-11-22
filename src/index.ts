@@ -598,6 +598,16 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 							}
 							await receipt;
 						},
+						syncedRows: () =>
+							(
+								ctx.collection as unknown as {
+									_state?: {
+										syncedData?: {
+											values: () => Iterable<T>;
+										};
+									};
+								}
+							)._state?.syncedData?.values() ?? [],
 						invalidate: () => {
 							(
 								ctx as { invalidateLoadedSubsets?: () => void }

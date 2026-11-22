@@ -225,7 +225,7 @@ export const subsetOrderOf = (
 	return order;
 };
 
-const readFieldPath = (row: unknown, path: FieldPath): unknown => {
+export const readFieldPath = (row: unknown, path: FieldPath): unknown => {
 	let value = row;
 	for (const segment of path) {
 		if (value === null || typeof value !== 'object') return undefined;

@@ -11,7 +11,12 @@ import {
 	Table,
 } from 'surrealdb';
 import { toRecordKeyString } from '../id';
-import { buildLiveCondition, windowBoundaryOf } from '../table';
+import {
+	buildLiveCondition,
+	readFieldPath,
+	subsetOrderOf,
+	windowBoundaryOf,
+} from '../table';
 import type { TableOptions } from '../types';
 import { subsetCacheKey } from './subset-identity';
 import type { ActiveSubsetTracker } from './subset-tracker';
@@ -50,6 +55,7 @@ type Entry = {
 	chain: Promise<void>;
 	ready: Promise<void>;
 	matches: (row: unknown) => boolean;
+	surelyMatches: (row: unknown) => boolean;
 };
 
 export type LiveSubsetsConfig<T extends { id: string | RecordId }> = {
@@ -60,12 +66,14 @@ export type LiveSubsetsConfig<T extends { id: string | RecordId }> = {
 	decode: (row: Row) => Promise<T>;
 	writeRows: (rows: T[]) => Promise<void>;
 	evict: (ids: string[]) => Promise<void>;
+	syncedRows: () => Iterable<T>;
 	invalidate: () => void;
 	onError?: (error: unknown) => void;
 };
 
 const compileMatcher = (
 	options: LoadSubsetOptions,
+	whenUnknown: boolean,
 ): ((row: unknown) => boolean) => {
 	const exprs = [options.where, options.cursor?.whereFrom].filter(
 		(expr): expr is WhereExpression => Boolean(expr),
@@ -81,18 +89,49 @@ const compileMatcher = (
 					toBooleanPredicate(evaluate(row as Row)),
 				);
 			} catch {
-				return true;
+				return whenUnknown;
 			}
 		};
 	} catch {
-		return () => true;
+		return () => whenUnknown;
 	}
+};
+
+const comparable = (value: unknown): string | number | bigint | undefined => {
+	if (value instanceof Date) return value.getTime();
+	return typeof value === 'string' ||
+		typeof value === 'number' ||
+		typeof value === 'bigint'
+		? value
+		: undefined;
+};
+
+const isBeforeBoundary = (
+	value: unknown,
+	boundary: unknown,
+	direction: 'asc' | 'desc',
+): boolean => {
+	const a = comparable(value);
+	const b = comparable(boundary);
+	if (a === undefined || b === undefined || typeof a !== typeof b) {
+		return false;
+	}
+	return direction === 'asc' ? a < b : a > b;
 };
 
 export function createLiveSubsets<T extends { id: string | RecordId }>(
 	config: LiveSubsetsConfig<T>,
 ) {
-	const { db, table, tracker, loadRows, decode, writeRows, evict } = config;
+	const {
+		db,
+		table,
+		tracker,
+		loadRows,
+		decode,
+		writeRows,
+		evict,
+		syncedRows,
+	} = config;
 	const tableResource = new Table(table.name);
 	const entries = new Map<string, Entry>();
 	const report = (error: unknown) => config.onError?.(error);
@@ -177,6 +216,32 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		return live;
 	};
 
+	// Cached rows inside the fetched range that the server no longer returned.
+	const missingFromSnapshot = (entry: Entry, rows: T[]): string[] => {
+		const { limit, offset } = entry.options;
+		if (offset) return [];
+		const isFullWindow = typeof limit === 'number' && rows.length >= limit;
+		const leading = subsetOrderOf(table, entry.options)[0];
+		const last = rows[rows.length - 1];
+		if (isFullWindow && (!leading || !last)) return [];
+
+		const inRange = (row: T) =>
+			!isFullWindow ||
+			isBeforeBoundary(
+				readFieldPath(row, leading?.field ?? []),
+				readFieldPath(last, leading?.field ?? []),
+				leading?.direction ?? 'asc',
+			);
+		const missing: string[] = [];
+		for (const row of syncedRows()) {
+			const id = toRecordKeyString(row.id);
+			if (!tracker.has(id) && entry.surelyMatches(row) && inRange(row)) {
+				missing.push(id);
+			}
+		}
+		return missing;
+	};
+
 	const applySnapshot = async (entry: Entry, raws: Row[]) => {
 		const rows = await Promise.all(raws.map((raw) => decode(raw)));
 		const previous = [...tracker.idsOf(entry.key)];
@@ -185,8 +250,11 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			new Set(rows.map((row) => toRecordKeyString(row.id))),
 		);
 		await writeRows(rows);
-		const dropped = previous.filter((id) => !tracker.has(id));
-		if (dropped.length) await evict(dropped);
+		const dropped = new Set([
+			...previous.filter((id) => !tracker.has(id)),
+			...missingFromSnapshot(entry, rows),
+		]);
+		if (dropped.size) await evict([...dropped]);
 	};
 
 	const sync = async (entry: Entry): Promise<void> => {
@@ -256,7 +324,8 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			buffer: [],
 			chain: Promise.resolve(),
 			ready: Promise.resolve(),
-			matches: compileMatcher(options),
+			matches: compileMatcher(options, true),
+			surelyMatches: compileMatcher(options, false),
 		};
 		entries.set(key, entry);
 		tracker.set(key, new Set());
