@@ -138,8 +138,6 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		e2ee,
 		crdt,
 		syncMode: inputSyncMode,
-		retry,
-		retryDelay,
 	} = config;
 
 	if (!queryClient || !queryKey) {
@@ -187,17 +185,17 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	};
 
 	const tableAccess = manageTable<T>(db, tableOptions);
+	const docs = new Map<string, LoroDoc>();
 	const loadSubsetRows = createSubsetLoader({
 		queryClient,
 		queryKey,
-		retry,
-		retryDelay,
+		retry: config.retry,
+		retryDelay: config.retryDelay,
 		load: (subset) =>
 			tableAccess.loadSubset(subset) as unknown as Promise<
 				Array<Record<string, unknown>>
 			>,
 	});
-	const docs = new Map<string, LoroDoc>();
 
 	const aadFor = (ctx: AADContext): Uint8Array =>
 		(e2ee?.aad ?? defaultAad)(ctx);

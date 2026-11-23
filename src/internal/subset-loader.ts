@@ -1,14 +1,24 @@
 import type { LoadSubsetOptions } from '@tanstack/db';
-import { CancelledError, type QueryClient } from '@tanstack/query-core';
+import {
+	CancelledError,
+	type DefaultOptions,
+	type QueryClient,
+} from '@tanstack/query-core';
 import {
 	CallTerminatedError,
 	ConnectionUnavailableError,
 	HttpConnectionError,
 	UnexpectedConnectionError,
 } from 'surrealdb';
-import type { SubsetRetryOptions } from '../types';
 
 type Row = Record<string, unknown>;
+
+type QueryDefaults = NonNullable<DefaultOptions['queries']>;
+
+export type SubsetRetryOptions = {
+	retry?: QueryDefaults['retry'];
+	retryDelay?: QueryDefaults['retryDelay'];
+};
 
 const DEFAULT_CONNECTION_RETRIES = 3;
 
