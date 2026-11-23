@@ -94,6 +94,55 @@ describe('on-demand LIVE startup', () => {
 	});
 });
 
+describe('on-demand LIVE after session renewal', () => {
+	it('reopens LIVE and keeps cached rows through a sign-out gap', async () => {
+		const listeners = new Map<string, (payload?: unknown) => void>();
+		let opened = 0;
+		let rows = [item('keep', 'a', 1)];
+		const db = {
+			subscribe: (event: string, next: (payload?: unknown) => void) => {
+				listeners.set(event, next);
+				return () => listeners.delete(event);
+			},
+			isFeatureSupported: () => true,
+			query: async () => [rows],
+			live: () => {
+				const live = { subscribe: () => {}, kill: async () => {} };
+				opened += 1;
+				return {
+					where: async () => live,
+					then: (resolve: (value: typeof live) => unknown) =>
+						Promise.resolve(live).then(resolve),
+				};
+			},
+		};
+		const items = createCollection(
+			surrealCollectionOptions<Item>({
+				db: db as never,
+				table: { name: 'item' },
+				queryClient: new QueryClient(),
+				queryKey: ['item', crypto.randomUUID()],
+				syncMode: 'on-demand',
+			}),
+		);
+		const query = createLiveQueryCollection((q) =>
+			q.from({ item: items }).where(({ item }) => eq(item.group, 'a')),
+		);
+		await query.preload();
+		expect(opened).toBe(1);
+
+		listeners.get('auth')?.(null);
+		expect(opened).toBe(1);
+		rows = [item('keep', 'a', 1), item('new', 'a', 2)];
+		listeners.get('auth')?.({ access: 'renewed' });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(opened).toBe(2);
+		expect(items.has('item:keep')).toBe(true);
+		expect(items.has('item:new')).toBe(true);
+	});
+});
+
 describe('on-demand snapshot reconciliation', () => {
 	it('removes a cached row the server no longer returns', async () => {
 		const keep = item('keep', 'a', 1);

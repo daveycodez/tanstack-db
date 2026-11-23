@@ -40,7 +40,10 @@ type LiveBuilderLike = PromiseLike<LiveSubscriptionLike> & {
 };
 
 type ConnectionEvents = {
-	subscribe?: (event: string, listener: () => void) => () => void;
+	subscribe?: (
+		event: string,
+		listener: (payload?: unknown) => void,
+	) => () => void;
 };
 
 type Entry = {
@@ -147,6 +150,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 	};
 
 	const released = new WeakSet<LiveSubscriptionLike>();
+	let signedOut = false;
 
 	const release = (lives: LiveSubscriptionLike[]) => {
 		for (const live of lives) {
@@ -221,7 +225,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 	// Cached rows inside the fetched range that the server no longer returned.
 	const missingFromSnapshot = (entry: Entry, rows: T[]): string[] => {
 		const { limit, offset } = entry.options;
-		if (offset) return [];
+		if (offset || signedOut) return [];
 		const isFullWindow = typeof limit === 'number' && rows.length >= limit;
 		const leading = subsetOrderOf(table, entry.options)[0];
 		const last = rows[rows.length - 1];
@@ -373,6 +377,12 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 				if (!dropped) return;
 				dropped = false;
 				void resync().catch(report);
+			}),
+			// Token renewal ends the session, and its LIVE queries with it.
+			events.subscribe('auth', (tokens) => {
+				const renewed = signedOut && Boolean(tokens);
+				signedOut = !tokens;
+				if (renewed) void resync().catch(report);
 			}),
 		);
 	}
