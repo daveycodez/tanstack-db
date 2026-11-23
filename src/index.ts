@@ -798,17 +798,19 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 					id: mutationId,
 				} as T);
 
+				const removeMissingRow = () =>
+					writeDeleteIfPresent(
+						writeUtils,
+						`${tableName}:${toRecordKeyString(mutationId)}`,
+					);
+
 				if (!crdtEnabled) {
 					if (!e2eeEnabled) {
 						const updated = await db
 							.update(mutationId)
 							.merge(normalizedModified);
 						if (updated) writeUtils.writeUpsert?.(normalized);
-						else
-							writeDeleteIfPresent(
-								writeUtils,
-								`${tableName}:${toRecordKeyString(mutationId)}`,
-							);
+						else removeMissingRow();
 						continue;
 					}
 
@@ -819,9 +821,11 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 							| Array<Record<string, unknown>>,
 					);
 					const currentRow = currentRows[0];
-					const decodedCurrent = currentRow
-						? await decodeBaseRow(currentRow)
-						: ({ id: mutationId } as T);
+					if (!currentRow) {
+						removeMissingRow();
+						continue;
+					}
+					const decodedCurrent = await decodeBaseRow(currentRow);
 					const merged = {
 						...(decodedCurrent as Record<string, unknown>),
 						...(normalizedModified as Record<string, unknown>),
@@ -831,10 +835,14 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 						omitUndefined(merged),
 						toRecordKeyString(mutationId),
 					);
-					await db.update(mutationId).merge(encoded);
-					writeUtils.writeUpsert?.(
-						normalizeRow({ ...decodedCurrent, ...merged } as T),
-					);
+					const updated = await db.update(mutationId).merge(encoded);
+					if (updated) {
+						writeUtils.writeUpsert?.(
+							normalizeRow({ ...decodedCurrent, ...merged } as T),
+						);
+					} else {
+						removeMissingRow();
+					}
 					continue;
 				}
 

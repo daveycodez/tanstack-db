@@ -114,3 +114,77 @@ describe('collection.delete with LIVE sync', () => {
 		});
 	}
 });
+
+describe('E2EE update of a row deleted on the server', () => {
+	const setupE2ee = (select: unknown[], merged: unknown) => {
+		const merges: unknown[] = [];
+		const db = {
+			isFeatureSupported: () => false,
+			select: async () => select,
+			query: async () => [[]],
+			update: () => ({
+				merge: async (payload: unknown) => {
+					merges.push(payload);
+					return merged;
+				},
+			}),
+		};
+		const things = createCollection(
+			surrealCollectionOptions<Thing>({
+				db: db as never,
+				table: { name: 'thing' },
+				queryClient: new QueryClient(),
+				queryKey: ['thing', crypto.randomUUID()],
+				syncMode: 'on-demand',
+				e2ee: {
+					enabled: true,
+					crypto: {
+						encrypt: async () => ({
+							v: 1,
+							alg: 'test',
+							kid: 'test',
+							n: 'n',
+							ct: 'ct',
+						}),
+						decrypt: async () => new Uint8Array(),
+					} as never,
+				},
+			}),
+		);
+		things.startSyncImmediate();
+		things._state.syncedData.set('thing:a', rows()[0] as Thing);
+		return { things, merges };
+	};
+
+	const edit = async (things: ReturnType<typeof setupE2ee>['things']) => {
+		await things
+			.update('thing:a', (draft) => {
+				draft.name = 'Edited';
+			})
+			.when('settled');
+		await flush();
+	};
+
+	it('removes the row without writing when it is already gone', async () => {
+		const { things, merges } = setupE2ee([], undefined);
+		await edit(things);
+
+		expect(merges).toEqual([]);
+		expect(things.has('thing:a')).toBe(false);
+	});
+
+	it('removes the row when it disappears during the update', async () => {
+		const { things, merges } = setupE2ee(rows(), undefined);
+		await edit(things);
+
+		expect(merges).toHaveLength(1);
+		expect(things.has('thing:a')).toBe(false);
+	});
+
+	it('keeps the row when the update succeeds', async () => {
+		const { things } = setupE2ee(rows(), { id: 'thing:a' });
+		await edit(things);
+
+		expect(things.has('thing:a')).toBe(true);
+	});
+});
