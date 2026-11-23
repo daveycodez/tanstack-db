@@ -141,6 +141,53 @@ describe('on-demand LIVE after session renewal', () => {
 		expect(items.has('item:keep')).toBe(true);
 		expect(items.has('item:new')).toBe(true);
 	});
+
+	it('reopens LIVE when the access token is replaced in place', async () => {
+		const listeners = new Map<string, (payload?: unknown) => void>();
+		let opened = 0;
+		const db = {
+			subscribe: (event: string, next: (payload?: unknown) => void) => {
+				listeners.set(event, next);
+				return () => listeners.delete(event);
+			},
+			isFeatureSupported: () => true,
+			query: async () => [[item('keep', 'a', 1)]],
+			live: () => {
+				const live = { subscribe: () => {}, kill: async () => {} };
+				opened += 1;
+				return {
+					where: async () => live,
+					then: (resolve: (value: typeof live) => unknown) =>
+						Promise.resolve(live).then(resolve),
+				};
+			},
+		};
+		const items = createCollection(
+			surrealCollectionOptions<Item>({
+				db: db as never,
+				table: { name: 'item' },
+				queryClient: new QueryClient(),
+				queryKey: ['item', crypto.randomUUID()],
+				syncMode: 'on-demand',
+			}),
+		);
+		const query = createLiveQueryCollection((q) =>
+			q.from({ item: items }).where(({ item }) => eq(item.group, 'a')),
+		);
+		await query.preload();
+		listeners.get('auth')?.({ access: 'first' });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const afterFirstToken = opened;
+
+		listeners.get('auth')?.({ access: 'first' });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(opened).toBe(afterFirstToken);
+
+		listeners.get('auth')?.({ access: 'second' });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(opened).toBe(afterFirstToken + 1);
+		expect(items.has('item:keep')).toBe(true);
+	});
 });
 
 describe('on-demand snapshot reconciliation', () => {

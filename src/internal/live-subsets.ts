@@ -152,6 +152,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 
 	const released = new WeakSet<LiveSubscriptionLike>();
 	let signedOut = false;
+	let currentAccess: string | undefined;
 
 	const release = (lives: LiveSubscriptionLike[]) => {
 		for (const live of lives) {
@@ -397,9 +398,13 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 				dropped = false;
 				void resync().catch(report);
 			}),
-			// Token renewal ends the session, and its LIVE queries with it.
+			// LIVE queries keep the token they started with, so a new token must reopen them.
 			events.subscribe('auth', (tokens) => {
-				const renewed = signedOut && Boolean(tokens);
+				const access = (
+					tokens as { access?: string } | null | undefined
+				)?.access;
+				const renewed = Boolean(tokens) && access !== currentAccess;
+				currentAccess = access;
 				signedOut = !tokens;
 				if (renewed) void resync().catch(report);
 			}),
