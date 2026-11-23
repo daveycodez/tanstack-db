@@ -16,10 +16,7 @@ import type {
 } from '@tanstack/db';
 import { persistedCollectionOptions } from '@tanstack/db-sqlite-persistence-core';
 import type { QueryFunctionContext } from '@tanstack/query-core';
-import {
-	DeleteOperationItemNotFoundError,
-	queryCollectionOptions,
-} from '@tanstack/query-db-collection';
+import { queryCollectionOptions } from '@tanstack/query-db-collection';
 import { LoroDoc } from 'loro-crdt';
 import { Features, RecordId } from 'surrealdb';
 import { createLoroProfile } from './crdt';
@@ -62,6 +59,7 @@ import {
 	toTableOptions,
 	toTableResource,
 } from './internal/table-options';
+import { deleteIfPresent } from './internal/write-delete';
 import { manageTable } from './table';
 import type {
 	AADContext,
@@ -646,18 +644,10 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		};
 	};
 
-	// A LIVE DELETE can remove the row before the delete request returns, so a
-	// row that is already gone is expected here.
 	const writeDeleteIfPresent = (
 		writeUtils: ReturnType<typeof getWriteUtils>,
 		key: string,
-	) => {
-		void (async () => writeUtils.writeDelete?.(key))().catch((error) => {
-			if (error instanceof DeleteOperationItemNotFoundError) return;
-			if (!onError) throw error;
-			onError(error);
-		});
-	};
+	) => deleteIfPresent(writeUtils, key, onError);
 
 	const base = queryCollectionOptions({
 		id: collectionId,
