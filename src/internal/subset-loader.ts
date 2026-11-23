@@ -4,12 +4,6 @@ import {
 	type DefaultOptions,
 	type QueryClient,
 } from '@tanstack/query-core';
-import {
-	CallTerminatedError,
-	ConnectionUnavailableError,
-	HttpConnectionError,
-	UnexpectedConnectionError,
-} from 'surrealdb';
 
 type Row = Record<string, unknown>;
 
@@ -22,11 +16,22 @@ export type SubsetRetryOptions = {
 
 const DEFAULT_CONNECTION_RETRIES = 3;
 
+// The SDK's ESM and CommonJS builds have separate error classes, so a client
+// from the other build fails `instanceof`. Its errors share this brand.
+const SURREAL_ERROR = Symbol.for('surrealdb.SurrealError');
+const CONNECTION_ERRORS = new Set([
+	'CallTerminatedError',
+	'ConnectionUnavailableError',
+	'HttpConnectionError',
+	'UnexpectedConnectionError',
+]);
+
 const isConnectionLoss = (error: unknown): boolean =>
-	error instanceof CallTerminatedError ||
-	error instanceof ConnectionUnavailableError ||
-	error instanceof HttpConnectionError ||
-	error instanceof UnexpectedConnectionError;
+	error instanceof Error &&
+	(error as unknown as Record<symbol, unknown>)[SURREAL_ERROR] === true &&
+	CONNECTION_ERRORS.has(error.name);
+
+let nextLoader = 0;
 
 type SubsetLoaderConfig = SubsetRetryOptions & {
 	queryClient: QueryClient;
@@ -46,13 +51,16 @@ export const createSubsetLoader = ({
 	retry,
 	retryDelay,
 }: SubsetLoaderConfig) => {
+	// Collections can share a QueryClient and queryKey, and two copies of this
+	// module can too, so a load's key must be unique across loaders.
+	const loaderId = `${++nextLoader}:${Math.random().toString(36).slice(2)}`;
 	let nextLoad = 0;
 
 	return async (
 		subset: LoadSubsetOptions,
 		signal?: AbortSignal,
 	): Promise<Row[]> => {
-		const key = [...queryKey, 'surreal-subset', ++nextLoad];
+		const key = [...queryKey, 'surreal-subset', loaderId, ++nextLoad];
 		const defaults = queryClient.defaultQueryOptions({ queryKey: key });
 		const policy = retry ?? defaults.retry;
 		const shouldRetry = (failures: number, error: Error): boolean => {

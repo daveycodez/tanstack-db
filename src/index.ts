@@ -407,6 +407,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		begin: () => void,
 		commit: () => void,
 		writeType: 'insert' | 'update' = 'insert',
+		isRetired: () => boolean = () => false,
 	) => {
 		if (!crdtEnabled || !updatesTableName) return;
 		const doc = getDoc(id);
@@ -452,6 +453,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			doc.import(bytes);
 		}
 
+		if (isRetired()) return;
 		const materialized = normalizeRow(materializeCrdt(doc, id));
 		begin();
 		try {
@@ -468,13 +470,16 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		let cleanupUpdateLive: Cleanup = NOOP;
 		let killed = false;
 
-		const ensureBaseLive = async () => {
+		// Direct loads, by request, so an unload or cleanup can retire them.
+		const directLoads = new Map<LoadSubsetOptions, AbortController>();
+
+		const ensureBaseLive = async (isRetired?: () => boolean) => {
 			if (cleanupBaseLive !== NOOP) return;
 			if (!db.isFeatureSupported?.(Features.LiveQueries)) return;
 			const live = (await db.live(
 				tableResource,
 			)) as unknown as LiveSubscriptionLike;
-			if (killed) {
+			if (killed || isRetired?.()) {
 				await live.kill();
 				return;
 			}
@@ -513,7 +518,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			};
 		};
 
-		const ensureUpdateLive = async () => {
+		const ensureUpdateLive = async (isRetired?: () => boolean) => {
 			if (!crdtEnabled || !updatesTable) return;
 			if (cleanupUpdateLive !== NOOP) return;
 			if (!db.isFeatureSupported?.(Features.LiveQueries)) return;
@@ -521,7 +526,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			const live = (await db.live(
 				updatesTable,
 			)) as unknown as LiveSubscriptionLike;
-			if (killed) {
+			if (killed || isRetired?.()) {
 				await live.kill();
 				return;
 			}
@@ -635,8 +640,30 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				await liveSubsets.load(subset);
 				return;
 			}
+			const acquisition = new AbortController();
+			const retire = () => acquisition.abort();
+			const isRetired = () => acquisition.signal.aborted;
+			if (subset.signal?.aborted) retire();
+			subset.signal?.addEventListener('abort', retire, { once: true });
+			directLoads.set(subset, acquisition);
+			try {
+				await loadDirectSubset(subset, acquisition.signal, isRetired);
+			} finally {
+				subset.signal?.removeEventListener('abort', retire);
+				if (directLoads.get(subset) === acquisition) {
+					directLoads.delete(subset);
+				}
+			}
+		};
+
+		const loadDirectSubset = async (
+			subset: LoadSubsetOptions,
+			signal: AbortSignal,
+			isRetired: () => boolean,
+		) => {
 			const key = subsetCacheKey(subset);
-			const rows = await loadSubsetRows(subset);
+			const rows = await loadSubsetRows(subset, signal);
+			if (isRetired()) return;
 			const ids = new Set(
 				(rows as unknown as Array<Record<string, unknown>>).map((row) =>
 					toRecordKeyString(row.id as string | RecordId),
@@ -666,20 +693,22 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 					ctx.commit,
 					'insert',
 				);
-				await ensureBaseLive();
+				if (!isRetired()) await ensureBaseLive(isRetired);
 				return;
 			}
 
 			for (const id of ids) {
+				if (isRetired()) return;
 				await hydrateCrdtDoc(
 					id,
 					upsertWrite,
 					ctx.begin,
 					ctx.commit,
 					'insert',
+					isRetired,
 				);
 			}
-			await ensureUpdateLive();
+			if (!isRetired()) await ensureUpdateLive(isRetired);
 		};
 
 		const unloadSubset = (subset: LoadSubsetOptions) => {
@@ -689,6 +718,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				liveSubsets.unload(subset);
 				return;
 			}
+			directLoads.get(subset)?.abort();
 			const key = subsetCacheKey(subset);
 			activeSubsets.delete(key);
 			if (activeSubsets.size === 0) {
@@ -707,6 +737,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 
 		const cleanup = () => {
 			killed = true;
+			for (const acquisition of directLoads.values()) acquisition.abort();
 			liveSubsets?.cleanup();
 			activeSubsets.clear();
 			cleanupBaseLive();
