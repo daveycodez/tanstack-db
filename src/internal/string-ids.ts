@@ -67,6 +67,19 @@ const convertPath = (
 	path: readonly string[],
 	convert: (value: unknown) => unknown,
 ): unknown => {
+	if (path[0] === '*') {
+		const rest = path.slice(1);
+		const convertItem = (item: unknown) => convertPath(item, rest, convert);
+		if (Array.isArray(value)) return value.map(convertItem);
+		if (value instanceof Set) return new Set([...value].map(convertItem));
+		if (!isPlainObject(value)) return value;
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [
+				key,
+				convertItem(item),
+			]),
+		);
+	}
 	if (Array.isArray(value) && path.length > 0) {
 		return value.map((item) => convertPath(item, path, convert));
 	}
@@ -80,6 +93,43 @@ const convertPath = (
 	const [head, ...rest] = path as [string, ...string[]];
 	if (!(head in value)) return value;
 	return { ...value, [head]: convertPath(value[head], rest, convert) };
+};
+
+const matchesFieldPattern = (
+	pattern: readonly string[],
+	path: readonly (string | number)[],
+): boolean => {
+	if (pattern.length === 0) return path.length === 0;
+	const [head, ...rest] = pattern;
+	if (head === '*') {
+		// A query can address an array item directly or read through the array.
+		return (
+			matchesFieldPattern(rest, path) ||
+			(path.length > 0 && matchesFieldPattern(rest, path.slice(1)))
+		);
+	}
+	return (
+		path.length > 0 &&
+		String(path[0]) === head &&
+		matchesFieldPattern(rest, path.slice(1))
+	);
+};
+
+/** Whether a queried path is a record-link field, honoring `*` segments. */
+export const isRecordFieldPath = (
+	fields: ReadonlySet<string>,
+	path: readonly (string | number)[],
+): boolean => {
+	if (fields.has(path.join('.'))) return true;
+	for (const field of fields) {
+		if (
+			field.includes('*') &&
+			matchesFieldPattern(field.split('.'), path)
+		) {
+			return true;
+		}
+	}
+	return false;
 };
 
 /**

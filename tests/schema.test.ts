@@ -41,9 +41,10 @@ describe('schemaTableOptions', () => {
 		expect(schemaTableOptions(tables, 'profile')).toEqual({
 			relation: false,
 			recordFields: [
-				'items.owner',
+				'items.*.owner',
 				'lit.owner',
 				'members',
+				'members.*',
 				'meta.manager',
 				'nullable',
 				'orgId',

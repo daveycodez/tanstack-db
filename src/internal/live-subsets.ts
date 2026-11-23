@@ -13,6 +13,7 @@ import {
 import { toRecordKeyString } from '../id';
 import {
 	buildLiveCondition,
+	pushesSubsetWindow,
 	readFieldPath,
 	type SubsetQueryOptions,
 	subsetOrderOf,
@@ -230,7 +231,13 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 
 	// Cached rows inside the fetched range that the server no longer returned.
 	const missingFromSnapshot = (entry: Entry, rows: T[]): string[] => {
-		const { limit, offset } = entry.options;
+		const windowed = pushesSubsetWindow(
+			table,
+			entry.options,
+			config.queryOptions,
+		);
+		const limit = windowed ? entry.options.limit : undefined;
+		const offset = windowed ? entry.options.offset : undefined;
 		if (offset || signedOut) return [];
 		const isFullWindow = typeof limit === 'number' && rows.length >= limit;
 		const leading = subsetOrderOf(table, entry.options)[0];
@@ -307,7 +314,12 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			if (stale()) return release(opened.splice(0));
 			await enqueue(entry, () => applySnapshot(entry, rows, stale));
 
-			const boundary = windowBoundaryOf(table, entry.options, rows);
+			const boundary = windowBoundaryOf(
+				table,
+				entry.options,
+				rows,
+				config.queryOptions,
+			);
 			if (live && boundary) {
 				const bounded = await openLive(
 					entry,

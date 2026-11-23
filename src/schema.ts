@@ -12,47 +12,33 @@ export type SurrealSchemaTable = {
 	fields?: readonly { path: readonly string[]; kind?: SchemaKind }[];
 };
 
-const holdsText = (kind: SchemaKind): boolean =>
-	kind.kind === 'string' ||
-	(kind.kind === 'union' && (kind.variants ?? []).some(holdsText));
+type TerminalPaths = { records: Set<string>; texts: Set<string> };
 
-const holdsRecord = (kind: SchemaKind): boolean =>
-	kind.kind === 'record' ||
-	(kind.kind === 'union' && (kind.variants ?? []).some(holdsRecord));
-
-const collectRecordPaths = (
+const collectTerminalPaths = (
 	kind: SchemaKind | undefined,
 	path: readonly string[],
-	out: Set<string>,
-	table: string,
+	out: TerminalPaths,
 ): void => {
 	if (!kind) return;
 	switch (kind.kind) {
 		case 'record':
-			out.add(path.join('.'));
+			out.records.add(path.join('.'));
+			return;
+		case 'string':
+			out.texts.add(path.join('.'));
 			return;
 		case 'union':
-			if (holdsRecord(kind) && holdsText(kind)) {
-				throw new Error(
-					`${table}.${path.join('.')} can hold both a record and a string, which string record ids cannot tell apart.`,
-				);
-			}
 			for (const variant of kind.variants ?? []) {
-				collectRecordPaths(variant, path, out, table);
+				collectTerminalPaths(variant, path, out);
 			}
 			return;
 		case 'array':
 		case 'set':
-			collectRecordPaths(kind.item, path, out, table);
+			collectTerminalPaths(kind.item, path, out);
 			return;
 		case 'objectLiteral':
 			for (const field of kind.fields ?? []) {
-				collectRecordPaths(
-					field.kind,
-					[...path, field.name],
-					out,
-					table,
-				);
+				collectTerminalPaths(field.kind, [...path, field.name], out);
 			}
 			return;
 	}
@@ -70,20 +56,30 @@ export function schemaTableOptions(
 		);
 	}
 	const relation = table.type?.kind === 'relation';
-	const paths = new Set<string>();
+	const terminals: TerminalPaths = {
+		records: new Set(),
+		texts: new Set(),
+	};
 	for (const field of table.fields ?? []) {
 		if (!Array.isArray(field.path)) {
 			throw new Error(
 				'Expected tables from a version 2 schema document (surrealkit compile).',
 			);
 		}
-		const path = field.path.filter((part) => part !== '*');
-		collectRecordPaths(field.kind, path, paths, table.name);
+		collectTerminalPaths(field.kind, field.path, terminals);
 	}
+	const paths = terminals.records;
 	paths.delete('id');
 	if (relation) {
 		paths.delete('in');
 		paths.delete('out');
+	}
+	for (const path of paths) {
+		if (terminals.texts.has(path)) {
+			throw new Error(
+				`${table.name}.${path} can hold both a record and a string, which string record ids cannot tell apart.`,
+			);
+		}
 	}
 	return { relation, recordFields: [...paths].sort() };
 }

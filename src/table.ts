@@ -14,12 +14,14 @@ import {
 	toRecordId,
 } from './id';
 import { firstRow } from './internal/records';
-import { toSurrealRecordId } from './internal/string-ids';
+import { isRecordFieldPath, toSurrealRecordId } from './internal/string-ids';
 import type { SurrealSubset, TableOptions } from './types';
 
 type QueryResult<T> = T[] | null;
 type FieldPath = Array<string | number>;
-type SqlFragment = { sql: string };
+// `sql` matches at least the rows the predicate matches. `narrow`, set when
+// the server can't evaluate it exactly, matches at most those rows.
+type SqlFragment = { sql: string; narrow?: string };
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -88,16 +90,37 @@ const toSqlFragment = (value: unknown): SqlFragment => {
 	throw new Error('Unsupported where expression node.');
 };
 
-const joinLogical = (op: 'AND' | 'OR', args: Array<unknown>): SqlFragment => {
-	const parts = args.map(toSqlFragment).map((frag) => frag.sql);
-	if (parts.length === 0) {
-		return { sql: op === 'AND' ? 'true' : 'false' };
-	}
-	if (parts.length === 1) return { sql: parts[0] };
-	return {
-		sql: parts.map((part) => `(${part})`).join(` ${op} `),
-	};
+const joinSql = (op: 'AND' | 'OR', parts: string[]): string => {
+	if (parts.length === 0) return op === 'AND' ? 'true' : 'false';
+	if (parts.length === 1) return parts[0] as string;
+	return parts.map((part) => `(${part})`).join(` ${op} `);
 };
+
+const sqlFragment = (sql: string, narrow: string): SqlFragment =>
+	sql === narrow ? { sql } : { sql, narrow };
+
+const joinLogical = (op: 'AND' | 'OR', args: Array<unknown>): SqlFragment => {
+	const fragments = args.map(toSqlFragment);
+	return sqlFragment(
+		joinSql(
+			op,
+			fragments.map((frag) => frag.sql),
+		),
+		joinSql(
+			op,
+			fragments.map((frag) => frag.narrow ?? frag.sql),
+		),
+	);
+};
+
+const negate = (arg: unknown): SqlFragment => {
+	const frag = toSqlFragment(arg);
+	return sqlFragment(`NOT (${frag.narrow ?? frag.sql})`, `NOT (${frag.sql})`);
+};
+
+// Evaluated locally: the server compares native record keys, TanStack DB
+// compares their string form.
+const LOCAL_ONLY: SqlFragment = { sql: 'true', narrow: 'false' };
 
 type BindParam = (value: unknown) => string;
 
@@ -110,6 +133,17 @@ export type SubsetQueryOptions = {
 	recordFields?: ReadonlySet<string>;
 };
 
+const isStringRecordField = (
+	table: TableOptions,
+	options: SubsetQueryOptions,
+	fieldPath: unknown,
+): boolean =>
+	options.recordFields !== undefined &&
+	isRecordFieldPath(
+		options.recordFields,
+		mapRelationPath(toFieldPath(fieldPath), table.relation),
+	);
+
 const filterValueFor = (
 	table: TableOptions,
 	options: SubsetQueryOptions,
@@ -117,8 +151,7 @@ const filterValueFor = (
 	value: unknown,
 ): unknown => {
 	if (!options.recordFields) return normalizeFilterValue(value);
-	const path = mapRelationPath(toFieldPath(fieldPath), table.relation);
-	return options.recordFields.has(path.join('.'))
+	return isStringRecordField(table, options, fieldPath)
 		? toSurrealRecordId(value)
 		: value;
 };
@@ -132,13 +165,13 @@ export type SubsetOrder = {
 
 export type WindowBoundary = SubsetOrder & { value: unknown };
 
-const whereSqlFrom = (
+const whereFragmentFrom = (
 	table: TableOptions,
 	expr: WhereExpression,
 	bind: BindParam,
 	scope?: string,
 	options: SubsetQueryOptions = {},
-): string => {
+): SqlFragment | undefined => {
 	const filterValue = (fieldPath: unknown, value: unknown) =>
 		filterValueFor(table, options, fieldPath, value);
 	const fieldSql = (fieldPath: unknown): string => {
@@ -167,6 +200,10 @@ const whereSqlFrom = (
 				'Got a field reference on the right side of a where comparison. Pass a concrete value.',
 			);
 		}
+		if (op !== '=' && op !== '!=') {
+			if (isStringRecordField(table, options, fieldPath))
+				return LOCAL_ONLY;
+		}
 		return {
 			sql: `${field} ${op} ${bind(filterValue(fieldPath, value))}`,
 		};
@@ -176,7 +213,7 @@ const whereSqlFrom = (
 		handlers: {
 			and: (...args) => joinLogical('AND', args),
 			or: (...args) => joinLogical('OR', args),
-			not: (arg) => ({ sql: `NOT (${toSqlFragment(arg).sql})` }),
+			not: negate,
 			eq: (field, value) => comparison(field, '=', value),
 			gt: (field, value) => comparison(field, '>', value),
 			gte: (field, value) => comparison(field, '>=', value),
@@ -184,6 +221,8 @@ const whereSqlFrom = (
 			lte: (field, value) => comparison(field, '<=', value),
 			like: (field, value) => comparison(field, 'LIKE', value),
 			ilike: (field, value) => {
+				if (isStringRecordField(table, options, field))
+					return LOCAL_ONLY;
 				const f = fieldSql(field);
 				const p = bind(filterValue(field, value));
 				return {
@@ -209,9 +248,16 @@ const whereSqlFrom = (
 		},
 	});
 
-	if (!fragment) return '';
-	return fragment.sql;
+	return fragment ?? undefined;
 };
+
+const whereSqlFrom = (
+	table: TableOptions,
+	expr: WhereExpression,
+	bind: BindParam,
+	scope?: string,
+	options: SubsetQueryOptions = {},
+): string => whereFragmentFrom(table, expr, bind, scope, options)?.sql ?? '';
 
 const subsetFilters = (subset?: SurrealSubset): WhereExpression[] =>
 	[subset?.where, subset?.cursor?.whereFrom].filter(
@@ -228,6 +274,30 @@ const filterSqlFrom = (
 	subsetFilters(subset)
 		.map((expr) => whereSqlFrom(table, expr, bind, scope, options))
 		.filter(Boolean);
+
+/**
+ * Whether LIMIT and START can run on the server. A filter or order the server
+ * can't evaluate like TanStack DB would pick a different window, so those
+ * subsets fetch every candidate row and TanStack DB applies the window.
+ */
+export const pushesSubsetWindow = (
+	table: TableOptions,
+	subset: SurrealSubset | undefined,
+	options: SubsetQueryOptions = {},
+): boolean => {
+	if (!options.recordFields) return true;
+	const exactFilters = subsetFilters(subset).every(
+		(expr) =>
+			whereFragmentFrom(table, expr, () => '$_', undefined, options)
+				?.narrow === undefined,
+	);
+	return (
+		exactFilters &&
+		!parseOrderByExpression(subset?.orderBy).some((clause) =>
+			isStringRecordField(table, options, clause.field),
+		)
+	);
+};
 
 const isOrdered = (subset?: SurrealSubset): boolean =>
 	Boolean(subset?.orderBy?.length) ||
@@ -265,7 +335,9 @@ export const windowBoundaryOf = (
 	table: TableOptions,
 	subset: SurrealSubset | undefined,
 	rows: ReadonlyArray<unknown>,
+	options: SubsetQueryOptions = {},
 ): WindowBoundary | undefined => {
+	if (!pushesSubsetWindow(table, subset, options)) return undefined;
 	const limit = subset?.limit;
 	if (typeof limit !== 'number' || rows.length === 0) return undefined;
 	if (rows.length < limit) return undefined;
@@ -325,12 +397,13 @@ export const buildSubsetQuery = (
 				)
 				.join(', ')}`
 		: '';
+	const windowed = pushesSubsetWindow(table, subset, options);
 	const limitSql =
-		typeof subset?.limit === 'number'
+		windowed && typeof subset?.limit === 'number'
 			? ` LIMIT ${nextParam(subset.limit)}`
 			: '';
 	const offsetSql =
-		typeof subset?.offset === 'number'
+		windowed && typeof subset?.offset === 'number'
 			? ` START ${nextParam(subset.offset)}`
 			: '';
 

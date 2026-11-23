@@ -306,9 +306,19 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		return doc;
 	};
 
-	const docRef = (id: string): RecordId => new RecordId(tableName, id);
-	const idFromDocRef = (doc: string | RecordId): string =>
-		toRecordKeyString(doc);
+	// String mode keys CRDT documents by the full id, so `user:42` and
+	// `user:⟨42⟩` stay separate documents.
+	const docKeyOf = (id: string | RecordId): string =>
+		stringIds ? toIdString(id) : toRecordKeyString(id);
+	const docRef = (id: string): RecordId | StringRecordId =>
+		stringIds
+			? (toSurrealRecordId(id) as StringRecordId)
+			: new RecordId(tableName, id);
+	const idFromDocRef = (doc: string | RecordId): string => docKeyOf(doc);
+	// Encryption stays bound to the record key in both modes, so opting into
+	// string ids keeps existing encrypted updates readable.
+	const aadKeyOf = (id: string): string =>
+		stringIds ? toRecordKeyString(id) : id;
 
 	const resolveActor = (
 		id: string,
@@ -338,7 +348,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		}
 		const envelope = toEnvelope(row as unknown as Record<string, unknown>);
 		if (!envelope) return new Uint8Array();
-		const id = idFromDocRef(row.doc);
+		const id = aadKeyOf(idFromDocRef(row.doc));
 		return e2ee.crypto.decrypt({
 			envelope,
 			aad: aadFor({
@@ -370,7 +380,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			aad: aadFor({
 				table: targetTable ?? tableName,
 				baseTable: tableName,
-				id,
+				id: aadKeyOf(id),
 				kind,
 			}),
 		});
@@ -699,7 +709,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			const rows = await tableAccess.loadSubset(subset);
 			const ids = new Set(
 				(rows as unknown as Array<Record<string, unknown>>).map((row) =>
-					toRecordKeyString(row.id as string | RecordId),
+					docKeyOf(row.id as string | RecordId),
 				),
 			);
 			activeSubsets.set(key, ids);
@@ -892,7 +902,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 					continue;
 				}
 
-				const id = toRecordKeyString(normalized.id);
+				const id = docKeyOf(normalized.id);
 				const doc = getDoc(id);
 				const vv = doc.oplogVersion();
 				const localChange: LocalChange<T> = {
@@ -978,7 +988,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 					continue;
 				}
 
-				const id = toRecordKeyString(rowId);
+				const id = docKeyOf(rowId);
 				const doc = getDoc(id);
 				const vv = doc.oplogVersion();
 				const localChange: LocalChange<T> = {
@@ -1000,7 +1010,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				const mutationKey = mutation.key as RecordId | string;
 				const mutationId = toSurrealId(mutationKey);
 				const rowId = toRowId(mutationKey);
-				const id = toRecordKeyString(rowId);
+				const id = docKeyOf(rowId);
 				if (!crdtEnabled) {
 					await db.delete(mutationId);
 					writeUtils.writeDelete?.(deleteKeyFor(rowId));

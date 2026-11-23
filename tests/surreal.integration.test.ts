@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { createCollection, createLiveQueryCollection, eq } from '@tanstack/db';
+import {
+	createCollection,
+	createLiveQueryCollection,
+	eq,
+	lt,
+} from '@tanstack/db';
 import { QueryClient } from '@tanstack/query-core';
 import { Features, RecordId, Surreal, Table } from 'surrealdb';
 
@@ -522,6 +527,80 @@ if (!integrationEnv) {
 		expect(sync.has('three')).toBe(false);
 
 		sync.cleanup();
+	});
+
+	it('evaluates string-id range filters like TanStack DB', async () => {
+		const tableName = createTableName('it_string_range');
+		createdTables.add(tableName);
+		await ensureTableSchema(db, tableName);
+		await db.insert(new Table(tableName), [
+			{ id: new RecordId(tableName, 2), title: 'two' },
+			{ id: new RecordId(tableName, 10), title: 'ten' },
+		]);
+		type Row = { id: string; title: string };
+		const items = createCollection(
+			surrealCollectionOptions<Row>({
+				db,
+				table: tableName,
+				queryClient: new QueryClient(),
+				queryKey: [tableName],
+				syncMode: 'on-demand',
+				recordIds: 'string',
+			}),
+		);
+		const below = `${tableName}:2`;
+		const query = createLiveQueryCollection((q) =>
+			q.from({ item: items }).where(({ item }) => lt(item.id, below)),
+		);
+		await query.preload();
+		expect(query.toArray.map((row) => row.title)).toEqual(['ten']);
+		await query.cleanup();
+		await items.cleanup();
+	});
+
+	it('writes declared object wildcard links as records', async () => {
+		const tableName = createTableName('it_string_wildcard');
+		createdTables.add(tableName);
+		await ensureTableSchema(db, tableName);
+		await db.query(
+			`DEFINE FIELD OVERWRITE links ON ${tableName} TYPE object;
+			DEFINE FIELD OVERWRITE links.* ON ${tableName} TYPE record<org>;`,
+		);
+		type Row = { id: string; links: Record<string, string> };
+		const items = createCollection(
+			surrealCollectionOptions<Row>({
+				db,
+				table: tableName,
+				tables: [
+					{
+						name: tableName,
+						fields: [
+							{ path: ['links'], kind: { kind: 'object' } },
+							{
+								path: ['links', '*'],
+								kind: { kind: 'record' },
+							},
+						],
+					},
+				],
+				queryClient: new QueryClient(),
+				queryKey: [tableName],
+				syncMode: 'eager',
+				recordIds: 'string',
+			}),
+		);
+		await items.preload();
+		const tx = items.insert({
+			id: `${tableName}:a`,
+			links: { one: 'org:acme' },
+		});
+		await tx.when('settled');
+		expect(tx.state).toBe('completed');
+		const [rows] = await db.query<[Array<{ links: { one: RecordId } }>]>(
+			`SELECT links FROM ${tableName};`,
+		);
+		expect(rows[0]?.links.one).toBeInstanceOf(RecordId);
+		await items.cleanup();
 	});
 
 	it('keeps an ordered live query window full as rows change', async () => {
