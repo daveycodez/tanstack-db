@@ -58,6 +58,7 @@ type Entry = {
 	buffer: LiveMessageLike[];
 	chain: Promise<void>;
 	ready: Promise<void>;
+	loadAbort?: AbortController;
 	matches: (row: unknown) => boolean;
 	surelyMatches: (row: unknown) => boolean;
 };
@@ -66,7 +67,10 @@ export type LiveSubsetsConfig<T extends { id: string | RecordId }> = {
 	db: Surreal;
 	table: TableOptions;
 	tracker: ActiveSubsetTracker;
-	loadRows: (subset: LoadSubsetOptions) => Promise<Row[]>;
+	loadRows: (
+		subset: LoadSubsetOptions,
+		signal?: AbortSignal,
+	) => Promise<Row[]>;
 	decode: (row: Row) => Promise<T>;
 	writeRows: (rows: T[]) => Promise<void>;
 	evict: (ids: string[]) => Promise<void>;
@@ -287,6 +291,10 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			release(opened.splice(0));
 			return entry.closed ? undefined : entry.ready;
 		};
+		// A newer sync replaces this one, so stop any retries it has left.
+		entry.loadAbort?.abort();
+		const loadAbort = new AbortController();
+		entry.loadAbort = loadAbort;
 		entry.failed = false;
 		entry.loading = true;
 
@@ -300,7 +308,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			if (live) opened.push(live);
 			if (stale()) return abandon();
 
-			const rows = await loadRows(entry.options);
+			const rows = await loadRows(entry.options, loadAbort.signal);
 			if (stale()) return abandon();
 			await enqueue(entry, () => applySnapshot(entry, rows, stale));
 
@@ -373,6 +381,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 
 		entries.delete(key);
 		entry.closed = true;
+		entry.loadAbort?.abort();
 		entry.buffer.length = 0;
 		release(entry.lives.splice(0));
 		// Keep the rows so a remount renders at once. Its snapshot reconciles them.
@@ -423,6 +432,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
 		for (const entry of entries.values()) {
 			entry.closed = true;
+			entry.loadAbort?.abort();
 			entry.buffer.length = 0;
 			release(entry.lives.splice(0));
 			tracker.delete(entry.key);

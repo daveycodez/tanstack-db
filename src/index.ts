@@ -54,6 +54,7 @@ import {
 	primeRecordIdIdentityFromSubset,
 	subsetCacheKey,
 } from './internal/subset-identity';
+import { createSubsetLoader } from './internal/subset-loader';
 import { ActiveSubsetTracker } from './internal/subset-tracker';
 import {
 	tableNameOf,
@@ -137,6 +138,8 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 		e2ee,
 		crdt,
 		syncMode: inputSyncMode,
+		retry,
+		retryDelay,
 	} = config;
 
 	if (!queryClient || !queryKey) {
@@ -184,6 +187,16 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 	};
 
 	const tableAccess = manageTable<T>(db, tableOptions);
+	const loadSubsetRows = createSubsetLoader({
+		queryClient,
+		queryKey,
+		retry,
+		retryDelay,
+		load: (subset) =>
+			tableAccess.loadSubset(subset) as unknown as Promise<
+				Array<Record<string, unknown>>
+			>,
+	});
 	const docs = new Map<string, LoroDoc>();
 
 	const aadFor = (ctx: AADContext): Uint8Array =>
@@ -557,12 +570,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 						table: tableOptions,
 						tracker: activeSubsets,
 						onError,
-						loadRows: (subset) =>
-							tableAccess.loadSubset(
-								subset,
-							) as unknown as Promise<
-								Array<Record<string, unknown>>
-							>,
+						loadRows: loadSubsetRows,
 						decode: decodeBaseRow,
 						writeRows: async (rows) => {
 							if (!rows.length) return;
@@ -630,7 +638,7 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				return;
 			}
 			const key = subsetCacheKey(subset);
-			const rows = await tableAccess.loadSubset(subset);
+			const rows = await loadSubsetRows(subset);
 			const ids = new Set(
 				(rows as unknown as Array<Record<string, unknown>>).map((row) =>
 					toRecordKeyString(row.id as string | RecordId),

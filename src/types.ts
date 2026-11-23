@@ -5,7 +5,7 @@ import type {
 	UtilsRecord,
 } from '@tanstack/db';
 import type { PersistedCollectionPersistence } from '@tanstack/db-sqlite-persistence-core';
-import type { QueryClient } from '@tanstack/query-core';
+import type { DefaultOptions, QueryClient } from '@tanstack/query-core';
 import type { LoroDoc } from 'loro-crdt';
 import type { RecordId, Surreal, Table } from 'surrealdb';
 
@@ -79,6 +79,18 @@ export type SurrealCRDTOptions<T extends object> = {
 
 export type AdapterSyncMode = 'eager' | 'on-demand' | 'progressive';
 
+type QueryDefaults = NonNullable<DefaultOptions['queries']>;
+
+export type SubsetRetryOptions = {
+	/**
+	 * TanStack Query retry policy for on-demand subset loads. Falls back to the
+	 * QueryClient's default, then to three retries for lost connections only.
+	 */
+	retry?: QueryDefaults['retry'];
+	/** Delay between subset load retries. Falls back to the QueryClient's default. */
+	retryDelay?: QueryDefaults['retryDelay'];
+};
+
 export type SurrealCollectionOptions<T extends object> = Omit<
 	CollectionConfig<T>,
 	'onInsert' | 'onUpdate' | 'onDelete' | 'sync' | 'getKey' | 'syncMode'
@@ -97,7 +109,7 @@ export type SurrealCollectionOptions<T extends object> = Omit<
 	e2ee?: SurrealE2EEOptions;
 	crdt?: SurrealCRDTOptions<T>;
 	onError?: (error: unknown) => void;
-};
+} & SubsetRetryOptions;
 
 export type PersistedSurrealCollectionOptions<T extends object> =
 	SurrealCollectionOptions<T> & {
