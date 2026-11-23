@@ -102,7 +102,10 @@ describe('loadSubset request', () => {
 		const commit = () => {};
 		const markReady = () => {};
 		const sync = options.sync.sync({
-			collection: { entries: () => [][Symbol.iterator]() },
+			collection: {
+				entries: () => [][Symbol.iterator](),
+				_state: { createSyncedKeyLookup: () => () => false },
+			},
 			begin,
 			write,
 			commit,
