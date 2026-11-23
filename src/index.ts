@@ -528,7 +528,6 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 				if (message.action === 'KILLED') return;
 				const row = message.value as Record<string, unknown>;
 				const rowId = row.id as string | RecordId;
-				const id = toRecordKeyString(rowId);
 
 				if (message.action === 'DELETE') {
 					ctx.begin();
