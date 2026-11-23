@@ -188,6 +188,97 @@ describe('on-demand LIVE after session renewal', () => {
 		expect(opened).toBe(afterFirstToken + 1);
 		expect(items.has('item:keep')).toBe(true);
 	});
+
+	const startupRace = () => {
+		const listeners = new Map<string, (payload?: unknown) => void>();
+		let finishConnecting = () => {};
+		const selects: Array<{
+			resolve: (rows: Item[][]) => void;
+			reject: (error: unknown) => void;
+		}> = [];
+		const db = {
+			ready: new Promise<void>((resolve) => {
+				finishConnecting = resolve;
+			}),
+			subscribe: (event: string, next: (payload?: unknown) => void) => {
+				listeners.set(event, next);
+				return () => listeners.delete(event);
+			},
+			isFeatureSupported: () => true,
+			query: () =>
+				new Promise<Item[][]>((resolve, reject) => {
+					selects.push({ resolve, reject });
+				}),
+			live: () => {
+				const live = { subscribe: () => {}, kill: async () => {} };
+				return {
+					where: async () => live,
+					then: (resolve: (value: typeof live) => unknown) =>
+						Promise.resolve(live).then(resolve),
+				};
+			},
+		};
+		const items = createCollection(
+			surrealCollectionOptions<Item>({
+				db: db as never,
+				table: { name: 'item' },
+				queryClient: new QueryClient(),
+				queryKey: ['item', crypto.randomUUID()],
+				syncMode: 'on-demand',
+			}),
+		);
+		const query = createLiveQueryCollection((q) =>
+			q.from({ item: items }).where(({ item }) => eq(item.group, 'a')),
+		);
+		let settled = false;
+		const loading = query.preload().finally(() => {
+			settled = true;
+		});
+		void loading.catch(() => undefined);
+		return {
+			listeners,
+			selects,
+			query,
+			loading,
+			isSettled: () => settled,
+			connect: () => finishConnecting(),
+		};
+	};
+	const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+	it('keeps preload pending when the first token arrives during startup', async () => {
+		const race = startupRace();
+		await tick();
+		race.listeners.get('auth')?.({ access: 'first' });
+		race.connect();
+		await tick();
+
+		expect(race.isSettled()).toBe(false);
+		expect(race.query.status).not.toBe('ready');
+
+		for (const select of race.selects) {
+			select.resolve([[item('keep', 'a', 1)]]);
+		}
+		await race.loading;
+		expect(race.query.toArray.map((row) => row.id.toString())).toEqual([
+			'item:keep',
+		]);
+	});
+
+	it('rejects a superseded preload when its replacement fails', async () => {
+		const race = startupRace();
+		await tick();
+		race.listeners.get('auth')?.({ access: 'first' });
+		race.connect();
+		await tick();
+
+		expect(race.isSettled()).toBe(false);
+		for (const select of race.selects) select.reject(new Error('denied'));
+		await tick();
+		expect(race.isSettled()).toBe(true);
+		expect(race.query.status).not.toBe('ready');
+		await race.loading.catch(() => undefined);
+	});
 });
 
 describe('on-demand snapshot reconciliation', () => {

@@ -282,6 +282,11 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		const stale = () => entry.closed || generation !== entry.generation;
 		const previous = entry.lives;
 		const opened: LiveSubscriptionLike[] = [];
+		// A superseded load settles with the sync that replaced it.
+		const abandon = (): Promise<void> | undefined => {
+			release(opened.splice(0));
+			return entry.closed ? undefined : entry.ready;
+		};
 		entry.failed = false;
 		entry.loading = true;
 
@@ -293,10 +298,10 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 					)
 				: undefined;
 			if (live) opened.push(live);
-			if (stale()) return release(opened.splice(0));
+			if (stale()) return abandon();
 
 			const rows = await loadRows(entry.options);
-			if (stale()) return release(opened.splice(0));
+			if (stale()) return abandon();
 			await enqueue(entry, () => applySnapshot(entry, rows, stale));
 
 			const boundary = windowBoundaryOf(table, entry.options, rows);
@@ -310,12 +315,15 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 					release(opened.splice(0, 1));
 				}
 			}
-			if (stale()) return release(opened.splice(0));
+			if (stale()) return abandon();
 
 			entry.lives = opened.splice(0);
 			release(previous);
 		} catch (error) {
 			release(opened.splice(0));
+			if (generation !== entry.generation && !entry.closed) {
+				return entry.ready;
+			}
 			if (generation === entry.generation) entry.failed = true;
 			throw error;
 		} finally {
