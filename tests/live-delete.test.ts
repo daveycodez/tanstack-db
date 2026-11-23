@@ -29,6 +29,13 @@ const setup = (notify: 'before-response' | 'after-response') => {
 		delete: async (id: RecordId) => {
 			if (notify === 'before-response') await emitDelete(id);
 		},
+		update: (id: RecordId) => ({
+			merge: async (payload: unknown) => {
+				if (String(id) !== 'thing:a') return payload;
+				if (notify === 'before-response') await emitDelete(id);
+				return undefined;
+			},
+		}),
 	};
 	const things = createCollection(
 		surrealCollectionOptions<Thing>({
@@ -70,6 +77,35 @@ describe('collection.delete with LIVE sync', () => {
 				await emitDelete(new RecordId('thing', 'a'));
 			}
 			await flush();
+
+			expect(things.has('thing:a')).toBe(false);
+			expect(unhandled).toEqual([]);
+			await all.cleanup();
+			await things.cleanup();
+		});
+	}
+
+	for (const notify of ['before-response', 'after-response'] as const) {
+		it(`removes a row deleted on the server when LIVE arrives ${notify} a queued update`, async () => {
+			const { things, emitDelete } = setup(notify);
+			const all = createLiveQueryCollection((q) =>
+				q.from({ thing: things }),
+			);
+			await all.preload();
+			await flush();
+
+			await things
+				.update('thing:a', (draft) => {
+					draft.name = 'Edited';
+				})
+				.when('settled');
+			await flush();
+			expect(things.has('thing:a')).toBe(false);
+
+			if (notify === 'after-response') {
+				await emitDelete(new RecordId('thing', 'a'));
+				await flush();
+			}
 
 			expect(things.has('thing:a')).toBe(false);
 			expect(unhandled).toEqual([]);

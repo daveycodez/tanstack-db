@@ -800,8 +800,15 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 
 				if (!crdtEnabled) {
 					if (!e2eeEnabled) {
-						await db.update(mutationId).merge(normalizedModified);
-						writeUtils.writeUpsert?.(normalized);
+						const updated = await db
+							.update(mutationId)
+							.merge(normalizedModified);
+						if (updated) writeUtils.writeUpsert?.(normalized);
+						else
+							writeDeleteIfPresent(
+								writeUtils,
+								`${tableName}:${toRecordKeyString(mutationId)}`,
+							);
 						continue;
 					}
 
