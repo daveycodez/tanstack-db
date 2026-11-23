@@ -157,7 +157,12 @@ const startOnDemandSync = (db: Surreal, tableName: string, label: string) => {
 	const rows = new Map<string, Record<string, unknown>>();
 	const writes: SyncWrite[] = [];
 	const result = options.sync?.sync({
-		collection: { has: (key: string) => rows.has(key) },
+		collection: {
+			has: (key: string) => rows.has(key),
+			_state: {
+				createSyncedKeyLookup: () => (key: string) => rows.has(key),
+			},
+		},
 		begin: () => {},
 		write: (change: unknown) => {
 			const write = change as SyncWrite;

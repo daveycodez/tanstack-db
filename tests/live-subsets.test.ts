@@ -207,7 +207,12 @@ const startSync = (db: unknown) => {
 		syncMode: 'on-demand',
 	});
 	const result = options.sync?.sync({
-		collection: { has: (key: string) => rows.has(key) },
+		collection: {
+			has: (key: string) => rows.has(key),
+			_state: {
+				createSyncedKeyLookup: () => (key: string) => rows.has(key),
+			},
+		},
 		begin: () => {},
 		write: (change: {
 			type: string;

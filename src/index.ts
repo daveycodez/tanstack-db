@@ -545,10 +545,10 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 			};
 		};
 
-		const collectionHas = (key: string): boolean | undefined =>
-			typeof ctx.collection?.has === 'function'
-				? ctx.collection.has(key)
-				: undefined;
+		// `collection.has` includes optimistic state, so a pending local delete
+		// would hide a row that sync still holds.
+		const acceptedSyncedKeys = () =>
+			ctx.collection._state.createSyncedKeyLookup();
 
 		const liveSubsets =
 			isOnDemandLike && !crdtEnabled
@@ -566,12 +566,13 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 						decode: decodeBaseRow,
 						writeRows: async (rows) => {
 							if (!rows.length) return;
+							const isSynced = acceptedSyncedKeys();
 							ctx.begin();
 							let receipt: unknown;
 							try {
 								for (const row of rows) {
 									ctx.write({
-										type: collectionHas(getKey(row))
+										type: isSynced(getKey(row))
 											? 'update'
 											: 'insert',
 										value: row,
@@ -583,9 +584,10 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 							await receipt;
 						},
 						evict: async (ids) => {
+							const isSynced = acceptedSyncedKeys();
 							const keys = ids
 								.map((id) => `${tableName}:${id}`)
-								.filter((key) => collectionHas(key) !== false);
+								.filter((key) => isSynced(key));
 							if (!keys.length) return;
 							ctx.begin();
 							let receipt: unknown;

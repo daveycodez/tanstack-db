@@ -51,6 +51,7 @@ type Entry = {
 	options: LoadSubsetOptions;
 	refs: number;
 	closed: boolean;
+	failed: boolean;
 	generation: number;
 	lives: LiveSubscriptionLike[];
 	loading: boolean;
@@ -178,6 +179,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		}
 
 		const row = await decode(raw);
+		if (entry.closed) return;
 		if (entry.matches(row)) {
 			tracker.addId(entry.key, id);
 			await writeRows([row]);
@@ -248,17 +250,28 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		return missing;
 	};
 
-	const applySnapshot = async (entry: Entry, raws: Row[]) => {
+	const applySnapshot = async (
+		entry: Entry,
+		raws: Row[],
+		stale: () => boolean,
+	) => {
+		if (stale()) return;
 		const rows = await Promise.all(raws.map((raw) => decode(raw)));
+		if (stale()) return;
+
 		const previous = [...tracker.idsOf(entry.key)];
-		tracker.set(
-			entry.key,
-			new Set(rows.map((row) => toRecordKeyString(row.id))),
-		);
+		const ids = new Set(rows.map((row) => toRecordKeyString(row.id)));
+		// Without a session a result can't prove a row is gone, but it can still
+		// hold public rows. Merge it, and let the resync on sign-in reconcile.
+		const authoritative = !signedOut;
+		if (!authoritative) for (const id of previous) ids.add(id);
+		tracker.set(entry.key, ids);
 		await writeRows(rows);
+		if (!authoritative) return;
+
 		const dropped = new Set([
 			...previous.filter((id) => !tracker.has(id)),
-			...missingFromSnapshot(entry, rows),
+			...(stale() ? [] : missingFromSnapshot(entry, rows)),
 		]);
 		if (dropped.size) await evict([...dropped]);
 	};
@@ -268,6 +281,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		const stale = () => entry.closed || generation !== entry.generation;
 		const previous = entry.lives;
 		const opened: LiveSubscriptionLike[] = [];
+		entry.failed = false;
 		entry.loading = true;
 
 		try {
@@ -282,7 +296,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 
 			const rows = await loadRows(entry.options);
 			if (stale()) return release(opened.splice(0));
-			await enqueue(entry, () => applySnapshot(entry, rows));
+			await enqueue(entry, () => applySnapshot(entry, rows, stale));
 
 			const boundary = windowBoundaryOf(table, entry.options, rows);
 			if (live && boundary) {
@@ -301,6 +315,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			release(previous);
 		} catch (error) {
 			release(opened.splice(0));
+			if (generation === entry.generation) entry.failed = true;
 			throw error;
 		} finally {
 			if (generation === entry.generation) flush(entry);
@@ -311,10 +326,10 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		const key = subsetCacheKey(options);
 		const existing = entries.get(key);
 		if (existing) {
-			if (options.refetch) {
+			// Every acquisition, refetches included, gets its own unload.
+			existing.refs += 1;
+			if (options.refetch || existing.failed) {
 				existing.ready = sync(existing);
-			} else {
-				existing.refs += 1;
 			}
 			return existing.ready;
 		}
@@ -324,6 +339,7 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 			options,
 			refs: 1,
 			closed: false,
+			failed: false,
 			generation: 0,
 			lives: [],
 			loading: false,
