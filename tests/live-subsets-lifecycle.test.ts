@@ -176,6 +176,32 @@ describe('live subset load failures', () => {
 		expect(store.has('a')).toBe(false);
 		expect(opened.every((live) => live.killed)).toBe(true);
 	});
+
+	it('stops returning the old failure after resync recovers', async () => {
+		const { subsets, store, state } = harness([item('a')]);
+		state.failNext = true;
+		await expect(subsets.load({})).rejects.toThrow('offline');
+
+		await subsets.resync();
+		expect(store.has('a')).toBe(true);
+
+		await subsets.load({});
+		expect(state.attempts).toBe(2);
+	});
+
+	it('stops returning the old failure after a reconnect recovers', async () => {
+		const { subsets, store, state, listeners } = harness([item('a')]);
+		state.failNext = true;
+		await expect(subsets.load({})).rejects.toThrow('offline');
+
+		listeners.get('disconnected')?.();
+		listeners.get('connected')?.();
+		await tick();
+		expect(store.has('a')).toBe(true);
+
+		await subsets.load({});
+		expect(state.attempts).toBe(2);
+	});
 });
 
 describe('live subset snapshots while signed out', () => {

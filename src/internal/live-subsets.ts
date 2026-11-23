@@ -375,7 +375,12 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 	const resync = async (): Promise<void> => {
 		const active = [...entries.values()];
 		if (!active.length) return;
-		await Promise.all(active.map((entry) => sync(entry).catch(report)));
+		await Promise.all(
+			active.map((entry) => {
+				entry.ready = sync(entry);
+				return entry.ready.catch(report);
+			}),
+		);
 		config.invalidate();
 	};
 

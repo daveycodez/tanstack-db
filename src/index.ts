@@ -584,10 +584,9 @@ function modernSurrealCollectionOptions<T extends SyncedTable<object>>(
 							await receipt;
 						},
 						evict: async (ids) => {
-							const isSynced = acceptedSyncedKeys();
-							const keys = ids
-								.map((id) => `${tableName}:${id}`)
-								.filter((key) => isSynced(key));
+							// Persistence can hold a row before core sees it, so always
+							// queue the delete. Core ignores one for an absent key.
+							const keys = ids.map((id) => `${tableName}:${id}`);
 							if (!keys.length) return;
 							ctx.begin();
 							let receipt: unknown;
