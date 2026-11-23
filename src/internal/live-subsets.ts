@@ -366,10 +366,8 @@ export function createLiveSubsets<T extends { id: string | RecordId }>(
 		entry.closed = true;
 		entry.buffer.length = 0;
 		release(entry.lives.splice(0));
-		const ids = [...tracker.idsOf(key)];
+		// Keep the rows so a remount renders at once. Its snapshot reconciles them.
 		tracker.delete(key);
-		const orphaned = ids.filter((id) => !tracker.has(id));
-		if (orphaned.length) void evict(orphaned).catch(report);
 	};
 
 	const resync = async (): Promise<void> => {

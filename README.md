@@ -452,7 +452,7 @@ In `on-demand` and `progressive` modes, each subset TanStack DB loads gets its o
 - **New, changed and deleted rows** that match the filter stream in. Rows that stop matching are removed, unless another loaded subset still holds them.
 - **Ordered, limited subsets** subscribe only to their window. After the first page loads, the live query is bounded at the last row's leading sort value (`name <= 'b'` for `orderBy(name).limit(n)`), so changes further down the table are not sent. When a row leaves the window, TanStack DB loads the next page as usual.
 - **A default sort** applies to limited or offset subsets with no `orderBy`: they sort by `id`, and `id` is the last tiebreaker for every ordered subset, so pages are stable.
-- **Unloading a subset** kills its live query and removes rows no other subset holds.
+- **Unloading a subset** kills its live query and keeps its rows, so a remounted query renders immediately. The next load reconciles anything that changed in the meantime.
 - **After a reconnect**, every loaded subset is refetched and resubscribed, since SurrealDB does not replay missed live events.
 
 `LIVE SELECT` has no `ORDER BY` or `LIMIT`, so a window is a `WHERE` bound on the leading sort column. Rows tied with the last row's value are included.

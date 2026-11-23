@@ -95,12 +95,11 @@ describe('live subsets with queued persistence writes', () => {
 		expect(changes).toEqual([]);
 	});
 
-	it('evicts a row still queued when its subset unloads', async () => {
+	it('applies a LIVE delete for a row still queued', async () => {
 		const { items, emitters, errors, block } = await setup();
-		const kept = { limit: 10 };
-		const unloaded = { limit: 20 };
-		await items._sync.loadSubset(kept);
-		await items._sync.loadSubset(unloaded);
+		await items._sync.loadSubset({ limit: 10 });
+		await items._sync.loadSubset({ limit: 20 });
+		await items._sync.loadSubset({ limit: 30 });
 		await tick();
 
 		// The first write holds storage, so the second waits outside core.
@@ -117,7 +116,11 @@ describe('live subsets with queued persistence writes', () => {
 		await tick();
 		expect(items.has('item:queued')).toBe(false);
 
-		items._sync.unloadSubset(unloaded);
+		emitters[2]?.({
+			action: 'DELETE',
+			value: { id: new RecordId('item', 'queued'), rank: 2 },
+		});
+		await tick();
 		release();
 		await tick();
 		await tick();

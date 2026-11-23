@@ -114,7 +114,24 @@ describe('live subset ownership', () => {
 		subsets.unload({});
 		await tick();
 		expect(current[0]?.killed).toBe(true);
-		expect(store.has('a')).toBe(false);
+		expect(store.has('a')).toBe(true);
+	});
+
+	it('keeps rows after unload and reconciles them on the next load', async () => {
+		const { subsets, store, state, tracker } = harness([
+			item('kept'),
+			item('removed'),
+		]);
+		await subsets.load({});
+		subsets.unload({});
+		await tick();
+		expect([...store.keys()].sort()).toEqual(['kept', 'removed']);
+		expect(tracker.size).toBe(0);
+
+		state.rows = [item('kept', 2)];
+		await subsets.load({});
+		expect([...store.keys()]).toEqual(['kept']);
+		expect(store.get('kept')?.rank).toBe(2);
 	});
 });
 
@@ -173,7 +190,7 @@ describe('live subset load failures', () => {
 
 		subsets.unload({});
 		await tick();
-		expect(store.has('a')).toBe(false);
+		expect(store.has('a')).toBe(true);
 		expect(opened.every((live) => live.killed)).toBe(true);
 	});
 

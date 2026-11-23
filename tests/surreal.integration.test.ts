@@ -487,7 +487,7 @@ if (!integrationEnv) {
 		sync.cleanup();
 	});
 
-	it('evicts rows and stops streaming when a subset unloads', async () => {
+	it('keeps rows and stops streaming when a subset unloads', async () => {
 		requireLiveQueries(db);
 		const tableName = createTableName('it_subset_unload');
 		createdTables.add(tableName);
@@ -509,7 +509,8 @@ if (!integrationEnv) {
 		]);
 
 		sync.unloadSubset(books);
-		await waitFor(() => !sync.has('one'), 'rows only the unloaded subset held');
+		await sleep(50);
+		expect(sync.has('one')).toBe(true);
 		expect(sync.has('two')).toBe(true);
 
 		await db.insert(new Table(tableName), {
